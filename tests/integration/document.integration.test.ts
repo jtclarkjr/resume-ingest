@@ -8,6 +8,7 @@ import type {
   DocumentVersionRecord
 } from '@/types/document.types'
 import { docxFile, pdfFile } from '../helpers/files'
+import { FakeResumeParser, FakeResumeTextExtractor } from '../helpers/fakes'
 
 const enabled = process.env.RUN_INTEGRATION_TESTS === '1'
 const integrationDescribe = enabled ? describe : describe.skip
@@ -18,7 +19,13 @@ let documentId: string | undefined
 integrationDescribe('MongoDB and private Vercel Blob integration', () => {
   const repository = new MongoDocumentRepository()
   const storage = new VercelBlobStorage()
-  const service = new DocumentService(repository, storage, prefix)
+  const service = new DocumentService(
+    repository,
+    storage,
+    new FakeResumeTextExtractor(),
+    new FakeResumeParser(),
+    prefix
+  )
 
   beforeAll(async () => {
     if (process.env.MONGODB_DB_NAME !== 'resume_ingest_test') {
@@ -43,6 +50,7 @@ integrationDescribe('MongoDB and private Vercel Blob integration', () => {
         )
       )
       await db.collection('document_versions').deleteMany({ documentId })
+      await db.collection('document_version_parses').deleteMany({ documentId })
       await db.collection<DocumentRecord>('documents').deleteOne({
         _id: documentId
       })
@@ -65,6 +73,7 @@ integrationDescribe('MongoDB and private Vercel Blob integration', () => {
       'Integration revision'
     )
     expect(updated.document.currentVersion).toBe(2)
+    expect(updated.parsedResume?.parseRevision).toBe(1)
 
     const versions = await service.listVersions(documentId)
     expect(versions.items.map((version) => version.version)).toEqual([2, 1])
@@ -84,6 +93,14 @@ integrationDescribe('MongoDB and private Vercel Blob integration', () => {
     ).toBe(true)
     expect(
       indexes.some((index) => index.name === 'document_ready_versions')
+    ).toBe(true)
+    const parseIndexes = await db
+      .collection('document_version_parses')
+      .indexes()
+    expect(
+      parseIndexes.some(
+        (index) => index.name === 'document_version_parse_unique'
+      )
     ).toBe(true)
   })
 })

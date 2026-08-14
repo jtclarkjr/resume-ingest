@@ -3,11 +3,14 @@ import { getMongoContext, type MongoContext } from '../db/mongodb'
 import type {
   DocumentListCursor,
   DocumentRecord,
+  DocumentVersionParseRecord,
   DocumentVersionRecord,
-  Page
+  Page,
+  ResumeParseResult
 } from '../types/document.types'
 import type {
   DocumentRepository,
+  PendingParseInput,
   PendingVersionInput
 } from './document.repository'
 import { encodeDocumentCursor, encodeVersionCursor } from '../utils/cursor'
@@ -19,7 +22,8 @@ export class MongoDocumentRepository implements DocumentRepository {
 
   async createInitial(
     document: DocumentRecord,
-    version: DocumentVersionRecord
+    version: DocumentVersionRecord,
+    parse: DocumentVersionParseRecord
   ): Promise<void> {
     const { client, db } = await this.getContext()
     const session = client.startSession()
@@ -31,6 +35,9 @@ export class MongoDocumentRepository implements DocumentRepository {
         await db
           .collection<DocumentVersionRecord>('document_versions')
           .insertOne(version, { session })
+        await db
+          .collection<DocumentVersionParseRecord>('document_version_parses')
+          .insertOne(parse, { session })
       })
     } finally {
       await session.endSession()
@@ -76,7 +83,8 @@ export class MongoDocumentRepository implements DocumentRepository {
   async completeVersion(
     documentId: string,
     version: number,
-    blob: { pathname: string; etag: string }
+    blob: { pathname: string; etag: string },
+    parse: DocumentVersionParseRecord
   ): Promise<DocumentVersionRecord> {
     const { client, db } = await this.getContext()
     const session = client.startSession()
@@ -93,6 +101,8 @@ export class MongoDocumentRepository implements DocumentRepository {
                 status: 'ready',
                 blobPathname: blob.pathname,
                 blobEtag: blob.etag,
+                currentParseRevision: parse.revision,
+                nextParseRevision: parse.revision + 1,
                 updatedAt: now
               }
             },
@@ -108,6 +118,9 @@ export class MongoDocumentRepository implements DocumentRepository {
             { $max: { currentVersion: version }, $set: { updatedAt: now } },
             { session }
           )
+        await db
+          .collection<DocumentVersionParseRecord>('document_version_parses')
+          .insertOne(parse, { session })
       })
     } finally {
       await session.endSession()
@@ -182,6 +195,184 @@ export class MongoDocumentRepository implements DocumentRepository {
       .findOne({ documentId, version, status: 'ready' })
   }
 
+  async reserveParse(
+    input: PendingParseInput
+  ): Promise<DocumentVersionParseRecord | null> {
+    const { client, db } = await this.getContext()
+    const session = client.startSession()
+    let reserved: DocumentVersionParseRecord | null = null
+    try {
+      await session.withTransaction(async () => {
+        const version = await db
+          .collection<DocumentVersionRecord>('document_versions')
+          .findOneAndUpdate(
+            {
+              documentId: input.documentId,
+              version: input.version,
+              status: 'ready'
+            },
+            [
+              {
+                $set: {
+                  nextParseRevision: {
+                    $add: [
+                      {
+                        $ifNull: [
+                          '$nextParseRevision',
+                          {
+                            $add: [{ $ifNull: ['$currentParseRevision', 0] }, 1]
+                          }
+                        ]
+                      },
+                      1
+                    ]
+                  }
+                }
+              }
+            ],
+            { returnDocument: 'before', session }
+          )
+        if (!version) return
+
+        const now = new Date()
+        reserved = {
+          ...input,
+          revision:
+            version.nextParseRevision ??
+            (version.currentParseRevision ?? 0) + 1,
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now
+        }
+        await db
+          .collection<DocumentVersionParseRecord>('document_version_parses')
+          .insertOne(reserved, { session })
+      })
+      return reserved
+    } finally {
+      await session.endSession()
+    }
+  }
+
+  async completeParse(
+    documentId: string,
+    version: number,
+    revision: number,
+    result: ResumeParseResult
+  ): Promise<DocumentVersionParseRecord> {
+    const { client, db } = await this.getContext()
+    const session = client.startSession()
+    let completed: DocumentVersionParseRecord | null = null
+    try {
+      await session.withTransaction(async () => {
+        const now = new Date()
+        completed = await db
+          .collection<DocumentVersionParseRecord>('document_version_parses')
+          .findOneAndUpdate(
+            { documentId, version, revision, status: 'pending' },
+            {
+              $set: {
+                status: 'ready',
+                model: result.model,
+                data: result.data,
+                warnings: result.warnings,
+                usage: result.usage,
+                parsedAt: now,
+                updatedAt: now
+              }
+            },
+            { returnDocument: 'after', session }
+          )
+        if (!completed) throw new Error('Reserved parse revision was not found')
+        await db
+          .collection<DocumentVersionRecord>('document_versions')
+          .updateOne(
+            { documentId, version, status: 'ready' },
+            {
+              $max: { currentParseRevision: revision },
+              $set: { updatedAt: now }
+            },
+            { session }
+          )
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (!completed) throw new Error('Could not complete parse revision')
+    return completed
+  }
+
+  async failParse(
+    documentId: string,
+    version: number,
+    revision: number,
+    reason: string
+  ): Promise<void> {
+    const { db } = await this.getContext()
+    await db
+      .collection<DocumentVersionParseRecord>('document_version_parses')
+      .updateOne(
+        { documentId, version, revision, status: 'pending' },
+        {
+          $set: {
+            status: 'failed',
+            failureReason: reason.slice(0, 500),
+            updatedAt: new Date()
+          }
+        }
+      )
+  }
+
+  async findCurrentReadyParse(
+    documentId: string,
+    version: number
+  ): Promise<DocumentVersionParseRecord | null> {
+    const { db } = await this.getContext()
+    return db
+      .collection<DocumentVersionParseRecord>('document_version_parses')
+      .find({ documentId, version, status: 'ready' })
+      .sort({ revision: -1 })
+      .limit(1)
+      .next()
+  }
+
+  async findReadyVersionsWithoutParse(
+    limit: number
+  ): Promise<DocumentVersionRecord[]> {
+    const { db } = await this.getContext()
+    return db
+      .collection<DocumentVersionRecord>('document_versions')
+      .aggregate<DocumentVersionRecord>([
+        { $match: { status: 'ready', blobPathname: { $type: 'string' } } },
+        {
+          $lookup: {
+            from: 'document_version_parses',
+            let: { documentId: '$documentId', version: '$version' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$documentId', '$$documentId'] },
+                      { $eq: ['$version', '$$version'] },
+                      { $eq: ['$status', 'ready'] }
+                    ]
+                  }
+                }
+              },
+              { $limit: 1 }
+            ],
+            as: 'readyParses'
+          }
+        },
+        { $match: { readyParses: { $size: 0 } } },
+        { $unset: 'readyParses' },
+        { $sort: { createdAt: 1, documentId: 1, version: 1 } },
+        { $limit: limit }
+      ])
+      .toArray()
+  }
+
   async listReadyVersions(
     documentId: string,
     limit: number,
@@ -225,6 +416,18 @@ export class MongoDocumentRepository implements DocumentRepository {
         .createIndex(
           { documentId: 1, status: 1, version: -1 },
           { name: 'document_ready_versions' }
+        ),
+      db
+        .collection<DocumentVersionParseRecord>('document_version_parses')
+        .createIndex(
+          { documentId: 1, version: 1, revision: 1 },
+          { name: 'document_version_parse_unique', unique: true }
+        ),
+      db
+        .collection<DocumentVersionParseRecord>('document_version_parses')
+        .createIndex(
+          { documentId: 1, version: 1, status: 1, revision: -1 },
+          { name: 'document_version_latest_ready_parse' }
         )
     ])
   }

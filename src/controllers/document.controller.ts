@@ -1,12 +1,13 @@
 import type {
   DocumentDto,
   DocumentSummaryDto,
-  DocumentVersionDto
+  DocumentVersionDetailDto
 } from '../dtos/document.dto'
 import {
   toDocumentDto,
   toDocumentSummaryDto,
-  toVersionDto
+  toVersionDetailDto,
+  toVersionSummaryDto
 } from '../dtos/document.dto'
 import { DocumentService } from '../services/document.service'
 
@@ -44,16 +45,27 @@ export class DocumentController {
   async getVersion(
     documentId: string,
     version: number
-  ): Promise<DocumentVersionDto> {
-    return toVersionDto(await this.service.getVersion(documentId, version))
+  ): Promise<DocumentVersionDetailDto> {
+    return toVersionDetailDto(
+      await this.service.getVersion(documentId, version)
+    )
   }
 
   async listVersions(documentId: string, limit?: number, cursor?: string) {
     const page = await this.service.listVersions(documentId, limit, cursor)
     return {
-      items: page.items.map(toVersionDto),
+      items: page.items.map(toVersionSummaryDto),
       nextCursor: page.nextCursor
     }
+  }
+
+  async reparseVersion(
+    documentId: string,
+    version: number
+  ): Promise<DocumentVersionDetailDto> {
+    return toVersionDetailDto(
+      await this.service.reparseVersion(documentId, version)
+    )
   }
 
   async createDownloadUrl(

@@ -2,8 +2,10 @@ import type {
   BlobUploadResult,
   DocumentListCursor,
   DocumentRecord,
+  DocumentVersionParseRecord,
   DocumentVersionRecord,
-  Page
+  Page,
+  ResumeParseResult
 } from '../types/document.types'
 
 export type PendingVersionInput = Omit<
@@ -11,10 +13,16 @@ export type PendingVersionInput = Omit<
   'version' | 'status' | 'createdAt' | 'updatedAt'
 >
 
+export type PendingParseInput = Omit<
+  DocumentVersionParseRecord,
+  'revision' | 'status' | 'createdAt' | 'updatedAt'
+>
+
 export interface DocumentRepository {
   createInitial(
     document: DocumentRecord,
-    version: DocumentVersionRecord
+    version: DocumentVersionRecord,
+    parse: DocumentVersionParseRecord
   ): Promise<void>
   reserveVersion(
     documentId: string,
@@ -23,7 +31,8 @@ export interface DocumentRepository {
   completeVersion(
     documentId: string,
     version: number,
-    blob: BlobUploadResult
+    blob: BlobUploadResult,
+    parse: DocumentVersionParseRecord
   ): Promise<DocumentVersionRecord>
   failVersion(
     documentId: string,
@@ -39,6 +48,26 @@ export interface DocumentRepository {
     documentId: string,
     version: number
   ): Promise<DocumentVersionRecord | null>
+  reserveParse(
+    input: PendingParseInput
+  ): Promise<DocumentVersionParseRecord | null>
+  completeParse(
+    documentId: string,
+    version: number,
+    revision: number,
+    result: ResumeParseResult
+  ): Promise<DocumentVersionParseRecord>
+  failParse(
+    documentId: string,
+    version: number,
+    revision: number,
+    reason: string
+  ): Promise<void>
+  findCurrentReadyParse(
+    documentId: string,
+    version: number
+  ): Promise<DocumentVersionParseRecord | null>
+  findReadyVersionsWithoutParse(limit: number): Promise<DocumentVersionRecord[]>
   listReadyVersions(
     documentId: string,
     limit: number,

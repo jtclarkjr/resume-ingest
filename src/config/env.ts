@@ -1,10 +1,14 @@
 import { z } from 'zod'
+import { DEFAULT_RESUME_PARSER_MODEL } from '../constants/document.constants'
 
 const RuntimeEnvironmentSchema = z.object({
   MONGODB_URI: z.string().min(1),
   MONGODB_DB_NAME: z.string().min(1).default('resume_ingest'),
   BLOB_READ_WRITE_TOKEN: z.string().min(1),
   DOCUMENT_API_KEY: z.string().min(32),
+  RESUME_PARSER_MODEL: z.string().min(1).default(DEFAULT_RESUME_PARSER_MODEL),
+  AI_GATEWAY_API_KEY: z.string().min(1).optional(),
+  VERCEL_OIDC_TOKEN: z.string().min(1).optional(),
   PORT: z.coerce.number().int().positive().default(3000)
 })
 

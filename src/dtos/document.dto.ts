@@ -7,8 +7,10 @@ import {
 import type {
   DocumentDetails,
   DocumentRecord,
+  DocumentVersionDetails,
   DocumentVersionRecord
 } from '../types/document.types'
+import { ParsedResumeSchema } from '../schemas/resume.schema'
 
 export const RequestIdSchema = z.string().openapi({
   example: '5a480ac1-6f76-49fc-a980-dab8f543b5ed'
@@ -25,7 +27,7 @@ export const ErrorEnvelopeSchema = z
   })
   .openapi('ErrorEnvelope')
 
-export const DocumentVersionSchema = z
+export const DocumentVersionSummarySchema = z
   .object({
     documentId: z.uuid().openapi({
       example: '7e26c0e2-a185-4a3c-87cc-c49d674accd8'
@@ -51,6 +53,10 @@ export const DocumentVersionSchema = z
     changeNote: z.string().optional().openapi({
       example: 'Added recent experience'
     }),
+    parseRevision: z.number().int().positive().nullable().openapi({
+      description: 'Current ready parse revision, or null if not parsed.',
+      example: 1
+    }),
     createdAt: z.iso
       .datetime()
       .openapi({ example: '2026-08-14T10:00:00.000Z' }),
@@ -59,7 +65,11 @@ export const DocumentVersionSchema = z
         '/v1/documents/7e26c0e2-a185-4a3c-87cc-c49d674accd8/versions/1/download'
     })
   })
-  .openapi('DocumentVersion')
+  .openapi('DocumentVersionSummary')
+
+export const DocumentVersionDetailSchema = DocumentVersionSummarySchema.extend({
+  parsedResume: ParsedResumeSchema.nullable()
+}).openapi('DocumentVersionDetail')
 
 export const DocumentSchema = z
   .object({
@@ -74,12 +84,14 @@ export const DocumentSchema = z
     updatedAt: z.iso
       .datetime()
       .openapi({ example: '2026-08-14T10:00:00.000Z' }),
-    latestVersion: DocumentVersionSchema.nullable()
+    latestVersion: DocumentVersionSummarySchema.nullable(),
+    parsedResume: ParsedResumeSchema.nullable()
   })
   .openapi('Document')
 
 export const DocumentSummarySchema = DocumentSchema.omit({
-  latestVersion: true
+  latestVersion: true,
+  parsedResume: true
 }).openapi('DocumentSummary')
 
 export const DocumentResponseSchema = z
@@ -87,7 +99,7 @@ export const DocumentResponseSchema = z
   .openapi('DocumentResponse')
 
 export const VersionResponseSchema = z
-  .object({ data: DocumentVersionSchema, requestId: RequestIdSchema })
+  .object({ data: DocumentVersionDetailSchema, requestId: RequestIdSchema })
   .openapi('VersionResponse')
 
 export const DocumentListResponseSchema = z
@@ -103,7 +115,7 @@ export const DocumentListResponseSchema = z
 export const VersionListResponseSchema = z
   .object({
     data: z.object({
-      items: z.array(DocumentVersionSchema),
+      items: z.array(DocumentVersionSummarySchema),
       nextCursor: z.string().nullable()
     }),
     requestId: RequestIdSchema
@@ -155,22 +167,38 @@ export const PageQuerySchema = z.object({
 
 export type DocumentDto = z.infer<typeof DocumentSchema>
 export type DocumentSummaryDto = z.infer<typeof DocumentSummarySchema>
-export type DocumentVersionDto = z.infer<typeof DocumentVersionSchema>
+export type DocumentVersionSummaryDto = z.infer<
+  typeof DocumentVersionSummarySchema
+>
+export type DocumentVersionDetailDto = z.infer<
+  typeof DocumentVersionDetailSchema
+>
 
-export function toVersionDto(
+export function toVersionSummaryDto(
   version: DocumentVersionRecord
-): DocumentVersionDto {
+): DocumentVersionSummaryDto {
   return {
     documentId: version.documentId,
     version: version.version,
     fileName: version.fileName,
     extension: version.extension,
-    contentType: version.contentType as DocumentVersionDto['contentType'],
+    contentType:
+      version.contentType as DocumentVersionSummaryDto['contentType'],
     sizeBytes: version.sizeBytes,
     sha256: version.sha256,
     ...(version.changeNote ? { changeNote: version.changeNote } : {}),
+    parseRevision: version.currentParseRevision ?? null,
     createdAt: version.createdAt.toISOString(),
     downloadPath: `/v1/documents/${version.documentId}/versions/${version.version}/download`
+  }
+}
+
+export function toVersionDetailDto(
+  details: DocumentVersionDetails
+): DocumentVersionDetailDto {
+  return {
+    ...toVersionSummaryDto(details.version),
+    parsedResume: details.parsedResume
   }
 }
 
@@ -190,7 +218,8 @@ export function toDocumentDto(details: DocumentDetails): DocumentDto {
   return {
     ...toDocumentSummaryDto(details.document),
     latestVersion: details.latestVersion
-      ? toVersionDto(details.latestVersion)
-      : null
+      ? toVersionSummaryDto(details.latestVersion)
+      : null,
+    parsedResume: details.parsedResume
   }
 }

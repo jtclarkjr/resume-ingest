@@ -1,4 +1,4 @@
-import { del, issueSignedToken, presignUrl, put } from '@vercel/blob'
+import { del, get, issueSignedToken, presignUrl, put } from '@vercel/blob'
 import {
   DOWNLOAD_URL_TTL_MS,
   MAX_FILE_BYTES
@@ -26,6 +26,12 @@ export class VercelBlobStorage implements BlobStorage {
 
   async delete(pathname: string): Promise<void> {
     await del(pathname)
+  }
+
+  async download(pathname: string): Promise<Uint8Array> {
+    const result = await get(pathname, { access: 'private' })
+    if (!result) throw new Error('Blob not found')
+    return new Uint8Array(await new Response(result.stream).arrayBuffer())
   }
 
   async createDownloadUrl(pathname: string): Promise<string> {

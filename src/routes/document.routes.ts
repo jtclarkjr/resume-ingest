@@ -41,12 +41,16 @@ const unsupportedMediaType = {
   description: 'Unsupported document type',
   content: jsonContent(ErrorEnvelopeSchema)
 }
+const unprocessableDocument = {
+  description: 'Document text cannot be extracted or parsed',
+  content: jsonContent(ErrorEnvelopeSchema)
+}
 const internalError = {
   description: 'Internal server error',
   content: jsonContent(ErrorEnvelopeSchema)
 }
-const blobError = {
-  description: 'Blob storage error',
+const upstreamError = {
+  description: 'AI Gateway or Blob storage error',
   content: jsonContent(ErrorEnvelopeSchema)
 }
 const databaseError = {
@@ -79,8 +83,9 @@ const createDocumentRoute = createRoute({
     401: unauthorized,
     413: payloadTooLarge,
     415: unsupportedMediaType,
+    422: unprocessableDocument,
     500: internalError,
-    502: blobError,
+    502: upstreamError,
     503: databaseError
   }
 })
@@ -149,8 +154,9 @@ const createVersionRoute = createRoute({
     404: notFound,
     413: payloadTooLarge,
     415: unsupportedMediaType,
+    422: unprocessableDocument,
     500: internalError,
-    502: blobError,
+    502: upstreamError,
     503: databaseError
   }
 })
@@ -216,7 +222,31 @@ const downloadVersionRoute = createRoute({
     401: unauthorized,
     404: notFound,
     500: internalError,
-    502: blobError,
+    502: upstreamError,
+    503: databaseError
+  }
+})
+
+const reparseVersionRoute = createRoute({
+  method: 'post',
+  path: '/v1/documents/{documentId}/versions/{version}/reparse',
+  tags: ['Versions'],
+  summary: 'Create the next parsed résumé revision from the immutable file',
+  description:
+    'Downloads the private source internally and promotes a new parse only after successful extraction and AI validation.',
+  security,
+  request: { params: VersionParamsSchema },
+  responses: {
+    200: {
+      description: 'New parsed résumé revision',
+      content: { 'application/json': { schema: VersionResponseSchema } }
+    },
+    400: badRequest,
+    401: unauthorized,
+    404: notFound,
+    422: unprocessableDocument,
+    500: internalError,
+    502: upstreamError,
     503: databaseError
   }
 })
@@ -288,6 +318,12 @@ export function registerDocumentRoutes(
   app.openapi(getVersionRoute, async (context) => {
     const { documentId, version } = context.req.valid('param')
     const data = await controller.getVersion(documentId, version)
+    return context.json({ data, requestId: context.get('requestId') }, 200)
+  })
+
+  app.openapi(reparseVersionRoute, async (context) => {
+    const { documentId, version } = context.req.valid('param')
+    const data = await controller.reparseVersion(documentId, version)
     return context.json({ data, requestId: context.get('requestId') }, 200)
   })
 

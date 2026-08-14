@@ -19,12 +19,15 @@ export function registerDocumentationRoutes(
       title: 'Resume Ingest API',
       version: API_VERSION,
       description:
-        'Upload private PDF, DOCX, and DOC files and manage immutable document versions.'
+        'Upload private PDF, DOCX, and DOC files, manage immutable versions, and generate revisioned source-faithful JSON Resume data.'
     },
     servers: [{ url: '/', description: 'Current deployment' }],
     tags: [
       { name: 'Documents', description: 'Logical document operations' },
-      { name: 'Versions', description: 'Immutable file version operations' }
+      {
+        name: 'Versions',
+        description: 'Immutable file versions and append-only parse revisions'
+      }
     ]
   })
 

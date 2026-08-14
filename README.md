@@ -1,8 +1,9 @@
 # Resume Ingest API
 
 A Bun, Hono, and TypeScript API for storing immutable PDF and Word document
-versions. Metadata lives in MongoDB Atlas and file bytes live in a private
-Vercel Blob store.
+versions and synchronously converting each version into revisioned,
+source-faithful JSON Resume data. Metadata and parse revisions live in MongoDB
+Atlas; file bytes live in a private Vercel Blob store.
 
 Interactive Swagger UI is available at `/docs` on local, preview, and production
 deployments. The OpenAPI 3.1 contract at `/openapi.json` is generated from the
@@ -25,7 +26,16 @@ MONGODB_URI=mongodb+srv://...
 MONGODB_DB_NAME=resume_ingest
 BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 DOCUMENT_API_KEY=a-random-secret-at-least-32-characters-long
+RESUME_PARSER_MODEL=openai/gpt-5.4-mini
+# Only needed for direct local development outside Vercel:
+AI_GATEWAY_API_KEY=...
 ```
+
+Vercel Functions receive `VERCEL_OIDC_TOKEN` automatically and the AI SDK uses
+it to authenticate to Vercel AI Gateway. It is not the API key for document
+routes. Clients and Swagger must continue to send `DOCUMENT_API_KEY` as the
+bearer credential. Never paste an OIDC token into Swagger or expose either token
+in browser application code.
 
 Never commit these values. `.env*` and `.vercel` are ignored. The Vercel
 development variables are pulled into `.env.vercel.local` so an existing
@@ -62,6 +72,9 @@ Open these URLs after starting the server:
 5. Open `POST /v1/documents/{documentId}/versions`, enter the ID, choose the
    next file, optionally add a change note, and execute it.
 6. Use the list or download routes to inspect the immutable versions.
+7. The create response contains `parsedResume`. Use the version detail route to
+   inspect a specific version, or execute the `reparse` route to append a new
+   parse revision without changing the source file.
 
 The Swagger page always calls its own deployment because the OpenAPI server URL
 is relative.
@@ -86,6 +99,7 @@ All `/v1` routes require `Authorization: Bearer <DOCUMENT_API_KEY>`.
 | `POST` | `/v1/documents/:documentId/versions`                   | Upload the next immutable version              |
 | `GET`  | `/v1/documents/:documentId/versions`                   | Ready versions, newest first                   |
 | `GET`  | `/v1/documents/:documentId/versions/:version`          | One ready version                              |
+| `POST` | `/v1/documents/:documentId/versions/:version/reparse`  | Append and promote a new parse revision        |
 | `GET`  | `/v1/documents/:documentId/versions/:version/download` | Redirect to a five-minute private download URL |
 
 Successful JSON responses use `{ "data": ..., "requestId": "..." }`. Errors use
@@ -123,6 +137,14 @@ curl --fail-with-body \
   "$RESUME_API_BASE_URL/v1/documents/$DOCUMENT_ID/versions"
 ```
 
+Reparse an immutable version with the currently configured model:
+
+```bash
+curl --fail-with-body --request POST \
+  -H "Authorization: Bearer $RESUME_DOCUMENT_API_KEY" \
+  "$RESUME_API_BASE_URL/v1/documents/$DOCUMENT_ID/versions/1/reparse"
+```
+
 List versions and follow a private download redirect:
 
 ```bash
@@ -142,14 +164,30 @@ curl --fail-with-body --location \
 - Supported formats: `.pdf`, `.docx`, and legacy `.doc`.
 - Validation checks the extension, declared MIME type, content signature, and
   size before allocating a version.
+- PDF text is extracted with `unpdf`; DOC and DOCX text is extracted with
+  `word-extractor`. Empty, malformed, or over-200,000-character extractions are
+  rejected with `422`.
+- Parsing is synchronous, uses a 60-second AI Gateway timeout, and defaults to
+  `openai/gpt-5.4-mini`. A Gateway or structured-output failure returns `502`
+  before a new upload version or Blob is committed.
+- Extracted plaintext is held only for the parsing call. It is never written to
+  MongoDB, Blob, application logs, or the OpenAPI document.
 - Version numbers are allocated atomically. Earlier versions and Blob paths are
   never overwritten.
+- Parse revisions are append-only. A failed reparse remains internal and never
+  replaces the previous ready result.
 - Failed internal versions are retained for diagnostics but hidden from public
   reads.
 - Files are private. MongoDB contains metadata only, and download endpoints
   create short-lived signed Blob URLs.
-- There is no deletion, extraction, external-ID mapping, or earlier-version
+- Document and version list endpoints omit the large parsed payload. Document
+  detail and version detail responses include `parsedResume`; historical data
+  may return it as `null` until backfilled.
+- There is no deletion, manual correction, external-ID mapping, or earlier-file
   modification API in v1.
+
+The API remains private. A portfolio should fetch this data server-side or at
+build time; do not place `DOCUMENT_API_KEY` in client-side JavaScript.
 
 ## Vercel setup
 
@@ -177,6 +215,14 @@ development variables and run the migration:
 ```bash
 vercel env pull .env.vercel.local --environment development --yes
 bun --env-file=.env.vercel.local run db:migrate
+```
+
+Backfill ready historical versions after the migration. The command is
+idempotent and logs only counts plus document/version identifiers—never résumé
+text or parsed personal data:
+
+```bash
+bun --env-file=.env.vercel.local run db:backfill-parses
 ```
 
 Deploy and open the generated `/docs` URL:
@@ -215,3 +261,10 @@ bun --env-file=.env.vercel.local test tests/integration
 
 Run the production index migration with `MONGODB_DB_NAME=resume_ingest` only
 after the integration suite passes.
+
+Real AI Gateway calls are intentionally gated separately from the normal test
+suite and use synthetic résumé data. Provide Gateway credentials and opt in:
+
+```bash
+RUN_AI_INTEGRATION_TESTS=1 bun test tests/integration/ai-gateway.integration.test.ts
+```

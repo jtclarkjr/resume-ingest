@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { createApplication } from '@/app'
 import {
+  FakeResumeParser,
+  FakeResumeTextExtractor,
   InMemoryBlobStorage,
   InMemoryDocumentRepository
 } from './helpers/fakes'
@@ -11,9 +13,17 @@ const API_KEY = 'test-api-key-'.padEnd(64, 'x')
 function createSubject() {
   const repository = new InMemoryDocumentRepository()
   const storage = new InMemoryBlobStorage()
-  const app = createApplication({ repository, storage, apiKey: API_KEY })
+  const extractor = new FakeResumeTextExtractor()
+  const parser = new FakeResumeParser()
+  const app = createApplication({
+    repository,
+    storage,
+    extractor,
+    parser,
+    apiKey: API_KEY
+  })
   const authorization = { Authorization: `Bearer ${API_KEY}` }
-  return { app, authorization, repository, storage }
+  return { app, authorization, repository, storage, extractor, parser }
 }
 
 function uploadBody(file: File, field?: { name: string; value: string }) {
@@ -47,6 +57,19 @@ describe('public documentation routes', () => {
       type: 'http',
       scheme: 'bearer'
     })
+    expect(spec.components.schemas.Document.properties).toHaveProperty(
+      'parsedResume'
+    )
+    expect(
+      spec.components.schemas.DocumentVersionDetail.allOf[1].properties
+    ).toHaveProperty('parsedResume')
+    expect(
+      spec.components.schemas.DocumentVersionSummary.properties
+    ).not.toHaveProperty('parsedResume')
+    expect(spec.components.schemas.ParsedResume.properties).toMatchObject({
+      parseRevision: { type: 'integer', exclusiveMinimum: 0 },
+      data: { $ref: '#/components/schemas/ResumeData' }
+    })
 
     for (const [path, item] of Object.entries<any>(spec.paths)) {
       if (!path.startsWith('/v1/')) continue
@@ -71,20 +94,23 @@ describe('public documentation routes', () => {
     const expectedStatuses: Record<string, Record<string, number[]>> = {
       '/v1/documents': {
         get: [200, 400, 401, 500, 503],
-        post: [201, 400, 401, 413, 415, 500, 502, 503]
+        post: [201, 400, 401, 413, 415, 422, 500, 502, 503]
       },
       '/v1/documents/{documentId}': {
         get: [200, 400, 401, 404, 500, 503]
       },
       '/v1/documents/{documentId}/versions': {
         get: [200, 400, 401, 404, 500, 503],
-        post: [201, 400, 401, 404, 413, 415, 500, 502, 503]
+        post: [201, 400, 401, 404, 413, 415, 422, 500, 502, 503]
       },
       '/v1/documents/{documentId}/versions/{version}': {
         get: [200, 400, 401, 404, 500, 503]
       },
       '/v1/documents/{documentId}/versions/{version}/download': {
         get: [302, 400, 401, 404, 500, 502, 503]
+      },
+      '/v1/documents/{documentId}/versions/{version}/reparse': {
+        post: [200, 400, 401, 404, 422, 500, 502, 503]
       }
     }
     for (const [path, operations] of Object.entries(expectedStatuses)) {
@@ -133,7 +159,11 @@ describe('document HTTP routes', () => {
     expect(created.data.title).toBe('Candidate Resume')
     expect(created.data.currentVersion).toBe(1)
     expect(created.data.latestVersion.version).toBe(1)
+    expect(created.data.parsedResume.data.basics.name).toBe('Jane Doe')
     expect(created.requestId).toBeString()
+    expect(createdResponse.headers.get('cache-control')).toBe(
+      'private, no-store'
+    )
 
     const versionResponse = await app.request(
       `/v1/documents/${documentId}/versions`,
@@ -150,6 +180,7 @@ describe('document HTTP routes', () => {
     const secondVersion = (await versionResponse.json()) as any
     expect(secondVersion.data.currentVersion).toBe(2)
     expect(secondVersion.data.latestVersion.version).toBe(2)
+    expect(secondVersion.data.parsedResume.parseRevision).toBe(1)
 
     const listResponse = await app.request(
       `/v1/documents/${documentId}/versions`,
@@ -158,11 +189,34 @@ describe('document HTTP routes', () => {
       }
     )
     expect(listResponse.status).toBe(200)
+    const versionList = (await listResponse.json()) as any
+    expect(versionList.data.items.map((item: any) => item.version)).toEqual([
+      2, 1
+    ])
+    expect(versionList.data.items[0].parseRevision).toBe(1)
+    expect(versionList.data.items[0]).not.toHaveProperty('parsedResume')
+    const documentListResponse = await app.request('/v1/documents', {
+      headers: authorization
+    })
+    const listedBody = (await documentListResponse.json()) as any
+    expect(listedBody.data.items[0]).not.toHaveProperty('parsedResume')
+
+    const versionDetail = await app.request(
+      `/v1/documents/${documentId}/versions/2`,
+      { headers: authorization }
+    )
     expect(
-      ((await listResponse.json()) as any).data.items.map(
-        (item: any) => item.version
-      )
-    ).toEqual([2, 1])
+      ((await versionDetail.json()) as any).data.parsedResume
+    ).not.toBeNull()
+
+    const reparse = await app.request(
+      `/v1/documents/${documentId}/versions/2/reparse`,
+      { method: 'POST', headers: authorization }
+    )
+    expect(reparse.status).toBe(200)
+    expect(
+      ((await reparse.json()) as any).data.parsedResume.parseRevision
+    ).toBe(2)
 
     const download = await app.request(
       `/v1/documents/${documentId}/versions/2/download`,

@@ -6,11 +6,17 @@ import { requestContextMiddleware } from './middleware/request-context.middlewar
 import type { DocumentRepository } from './repositories/document.repository'
 import { registerRoutes } from './routes'
 import type { AppEnvironment } from './types/app.types'
-import type { BlobStorage } from './types/document.types'
+import type {
+  BlobStorage,
+  ResumeParser,
+  ResumeTextExtractor
+} from './types/document.types'
 
 export interface ApplicationDependencies {
   repository: DocumentRepository
   storage: BlobStorage
+  extractor: ResumeTextExtractor
+  parser: ResumeParser
   apiKey: string
 }
 
@@ -34,6 +40,10 @@ export function createApplication(dependencies: ApplicationDependencies) {
 
   app.use('*', requestContextMiddleware())
   app.use('*', secureHeaders())
+  app.use('/v1/*', async (context, next) => {
+    await next()
+    context.header('Cache-Control', 'private, no-store')
+  })
   registerRoutes(app, dependencies)
 
   app.notFound((context) =>

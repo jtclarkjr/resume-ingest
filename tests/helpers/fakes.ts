@@ -7,26 +7,38 @@ import type {
   BlobUploadResult,
   DocumentListCursor,
   DocumentRecord,
+  DocumentVersionParseRecord,
   DocumentVersionRecord,
   Page,
+  ResumeParseResult,
+  ResumeParser,
+  ResumeTextExtractor,
   ValidatedDocumentFile
 } from '@/types/document.types'
+import type { PendingParseInput } from '@/repositories/document.repository'
 import { encodeDocumentCursor, encodeVersionCursor } from '@/utils/cursor'
+import { sampleParseResult } from './resume'
 
 export class InMemoryDocumentRepository implements DocumentRepository {
   readonly documents = new Map<string, DocumentRecord>()
   readonly versions = new Map<string, DocumentVersionRecord>()
+  readonly parses = new Map<string, DocumentVersionParseRecord>()
   failCreate = false
 
   async createInitial(
     document: DocumentRecord,
-    version: DocumentVersionRecord
+    version: DocumentVersionRecord,
+    parse: DocumentVersionParseRecord
   ): Promise<void> {
     if (this.failCreate) throw new Error('create failed')
     this.documents.set(document._id, structuredClone(document))
     this.versions.set(
       this.key(document._id, version.version),
       structuredClone(version)
+    )
+    this.parses.set(
+      this.parseKey(document._id, version.version, parse.revision),
+      structuredClone(parse)
     )
   }
 
@@ -53,7 +65,8 @@ export class InMemoryDocumentRepository implements DocumentRepository {
   async completeVersion(
     documentId: string,
     version: number,
-    blob: BlobUploadResult
+    blob: BlobUploadResult,
+    parse: DocumentVersionParseRecord
   ): Promise<DocumentVersionRecord> {
     const record = this.versions.get(this.key(documentId, version))
     const document = this.documents.get(documentId)
@@ -61,9 +74,15 @@ export class InMemoryDocumentRepository implements DocumentRepository {
     record.status = 'ready'
     record.blobPathname = blob.pathname
     record.blobEtag = blob.etag
+    record.currentParseRevision = parse.revision
+    record.nextParseRevision = parse.revision + 1
     record.updatedAt = new Date()
     document.currentVersion = Math.max(document.currentVersion, version)
     document.updatedAt = record.updatedAt
+    this.parses.set(
+      this.parseKey(documentId, version, parse.revision),
+      structuredClone(parse)
+    )
     return structuredClone(record)
   }
 
@@ -122,6 +141,106 @@ export class InMemoryDocumentRepository implements DocumentRepository {
     return value?.status === 'ready' ? structuredClone(value) : null
   }
 
+  async reserveParse(
+    input: PendingParseInput
+  ): Promise<DocumentVersionParseRecord | null> {
+    const version = this.versions.get(this.key(input.documentId, input.version))
+    if (version?.status !== 'ready') return null
+    const revision =
+      version.nextParseRevision ?? (version.currentParseRevision ?? 0) + 1
+    version.nextParseRevision = revision + 1
+    const now = new Date()
+    const parse: DocumentVersionParseRecord = {
+      ...structuredClone(input),
+      revision,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now
+    }
+    this.parses.set(
+      this.parseKey(input.documentId, input.version, revision),
+      parse
+    )
+    return structuredClone(parse)
+  }
+
+  async completeParse(
+    documentId: string,
+    versionNumber: number,
+    revision: number,
+    result: ResumeParseResult
+  ): Promise<DocumentVersionParseRecord> {
+    const parse = this.parses.get(
+      this.parseKey(documentId, versionNumber, revision)
+    )
+    const version = this.versions.get(this.key(documentId, versionNumber))
+    if (!parse || parse.status !== 'pending' || !version) {
+      throw new Error('reserved parse missing')
+    }
+    const now = new Date()
+    Object.assign(parse, {
+      status: 'ready' as const,
+      model: result.model,
+      data: structuredClone(result.data),
+      warnings: [...result.warnings],
+      usage: structuredClone(result.usage),
+      parsedAt: now,
+      updatedAt: now
+    })
+    version.currentParseRevision = Math.max(
+      version.currentParseRevision ?? 0,
+      revision
+    )
+    return structuredClone(parse)
+  }
+
+  async failParse(
+    documentId: string,
+    version: number,
+    revision: number,
+    reason: string
+  ): Promise<void> {
+    const parse = this.parses.get(this.parseKey(documentId, version, revision))
+    if (parse?.status === 'pending') {
+      parse.status = 'failed'
+      parse.failureReason = reason
+      parse.updatedAt = new Date()
+    }
+  }
+
+  async findCurrentReadyParse(
+    documentId: string,
+    version: number
+  ): Promise<DocumentVersionParseRecord | null> {
+    const parse = [...this.parses.values()]
+      .filter(
+        (item) =>
+          item.documentId === documentId &&
+          item.version === version &&
+          item.status === 'ready'
+      )
+      .toSorted((left, right) => right.revision - left.revision)[0]
+    return parse ? structuredClone(parse) : null
+  }
+
+  async findReadyVersionsWithoutParse(
+    limit: number
+  ): Promise<DocumentVersionRecord[]> {
+    return [...this.versions.values()]
+      .filter(
+        (version) =>
+          version.status === 'ready' &&
+          ![...this.parses.values()].some(
+            (parse) =>
+              parse.documentId === version.documentId &&
+              parse.version === version.version &&
+              parse.status === 'ready'
+          )
+      )
+      .slice(0, limit)
+      .map((version) => structuredClone(version))
+  }
+
   async listReadyVersions(
     documentId: string,
     limit: number,
@@ -149,6 +268,14 @@ export class InMemoryDocumentRepository implements DocumentRepository {
   private key(documentId: string, version: number): string {
     return `${documentId}:${version}`
   }
+
+  private parseKey(
+    documentId: string,
+    version: number,
+    revision: number
+  ): string {
+    return `${documentId}:${version}:${revision}`
+  }
 }
 
 export class InMemoryBlobStorage implements BlobStorage {
@@ -171,8 +298,39 @@ export class InMemoryBlobStorage implements BlobStorage {
     this.files.delete(pathname)
   }
 
+  async download(pathname: string): Promise<Uint8Array> {
+    const file = this.files.get(pathname)
+    if (!file) throw new Error('blob missing')
+    return structuredClone(file.bytes)
+  }
+
   async createDownloadUrl(pathname: string): Promise<string> {
     if (!this.files.has(pathname)) throw new Error('blob missing')
     return `https://blob.example.test/${encodeURIComponent(pathname)}?signed=1`
+  }
+}
+
+export class FakeResumeTextExtractor implements ResumeTextExtractor {
+  readonly files: ValidatedDocumentFile[] = []
+  text = 'Jane Doe\nSoftware Engineer\n• Built reliable APIs.'
+  error: Error | undefined
+
+  async extract(file: ValidatedDocumentFile): Promise<string> {
+    this.files.push(structuredClone(file))
+    if (this.error) throw this.error
+    return this.text
+  }
+}
+
+export class FakeResumeParser implements ResumeParser {
+  readonly texts: string[] = []
+  readonly model = 'openai/gpt-5.4-mini'
+  result: ResumeParseResult = sampleParseResult(this.model)
+  error: Error | undefined
+
+  async parse(text: string): Promise<ResumeParseResult> {
+    this.texts.push(text)
+    if (this.error) throw this.error
+    return structuredClone(this.result)
   }
 }

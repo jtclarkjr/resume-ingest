@@ -6,7 +6,32 @@ endobj
 << /Type /Pages /Kids [3 0 R] /Count 1 >>
 endobj
 3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 232 >>
+stream
+BT
+/F1 12 Tf
+40 760 Td
+(JANE DOE) Tj
+0 -18 Td
+(SOFTWARE ENGINEER) Tj
+0 -24 Td
+(EXPERIENCE) Tj
+0 -18 Td
+(Example Co. | 2022-04 - Present) Tj
+0 -18 Td
+(- Built reliable APIs.) Tj
+0 -24 Td
+(SKILLS) Tj
+0 -18 Td
+(TypeScript, Hono) Tj
+ET
+endstream
 endobj
 trailer
 << /Root 1 0 R >>
