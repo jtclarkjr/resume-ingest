@@ -1,19 +1,10 @@
-import { swaggerUI } from '@hono/swagger-ui'
 import { OpenAPIHono } from '@hono/zod-openapi'
-import { bodyLimit } from 'hono/body-limit'
 import { secureHeaders } from 'hono/secure-headers'
-import {
-  API_VERSION,
-  ERROR_CODES,
-  MAX_REQUEST_BYTES
-} from './constants/document.constants'
-import { DocumentController } from './controllers/document.controller'
+import { ERROR_CODES } from './constants/document.constants'
 import { AppError } from './errors/app-error'
-import { bearerAuthMiddleware } from './middleware/auth.middleware'
 import { requestContextMiddleware } from './middleware/request-context.middleware'
 import type { DocumentRepository } from './repositories/document.repository'
-import { registerDocumentRoutes } from './routes/document.routes'
-import { DocumentService } from './services/document.service'
+import { registerRoutes } from './routes'
 import type { AppEnvironment } from './types/app.types'
 import type { BlobStorage } from './types/document.types'
 
@@ -43,78 +34,7 @@ export function createApplication(dependencies: ApplicationDependencies) {
 
   app.use('*', requestContextMiddleware())
   app.use('*', secureHeaders())
-  app.use('/v1/*', bearerAuthMiddleware(dependencies.apiKey))
-  const uploadLimit = bodyLimit({
-    maxSize: MAX_REQUEST_BYTES,
-    onError: (context) =>
-      context.json(
-        {
-          error: {
-            code: ERROR_CODES.payloadTooLarge,
-            message: 'The multipart request is too large',
-            requestId: context.get('requestId')
-          }
-        },
-        413
-      )
-  })
-  app.use('/v1/documents', uploadLimit)
-  app.use('/v1/documents/*/versions', uploadLimit)
-
-  app.get('/health', (context) =>
-    context.json({
-      data: { status: 'ok', version: API_VERSION },
-      requestId: context.get('requestId')
-    })
-  )
-
-  app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
-    type: 'http',
-    scheme: 'bearer',
-    bearerFormat: 'API key',
-    description: 'Paste the DOCUMENT_API_KEY value.'
-  })
-
-  const service = new DocumentService(
-    dependencies.repository,
-    dependencies.storage
-  )
-  registerDocumentRoutes(app, new DocumentController(service))
-
-  app.doc31('/openapi.json', {
-    openapi: '3.1.0',
-    info: {
-      title: 'Resume Ingest API',
-      version: API_VERSION,
-      description:
-        'Upload private PDF, DOCX, and DOC files and manage immutable document versions.'
-    },
-    servers: [{ url: '/', description: 'Current deployment' }],
-    tags: [
-      { name: 'Documents', description: 'Logical document operations' },
-      { name: 'Versions', description: 'Immutable file version operations' }
-    ]
-  })
-
-  app.use('/docs', async (context, next) => {
-    context.header(
-      'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; connect-src 'self'"
-    )
-    context.header('Cache-Control', 'no-store')
-    await next()
-  })
-  app.get(
-    '/docs',
-    swaggerUI({
-      url: '/openapi.json',
-      version: '5.32.9',
-      deepLinking: true,
-      displayRequestDuration: true,
-      persistAuthorization: false,
-      tryItOutEnabled: true
-    })
-  )
+  registerRoutes(app, dependencies)
 
   app.notFound((context) =>
     context.json(

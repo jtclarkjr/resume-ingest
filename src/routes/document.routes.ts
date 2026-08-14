@@ -1,5 +1,7 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
-import { DocumentController } from '../controllers/document.controller'
+import { bodyLimit } from 'hono/body-limit'
+import { ERROR_CODES, MAX_REQUEST_BYTES } from '../constants/document.constants'
+import type { DocumentController } from '../controllers/document.controller'
 import {
   CreateDocumentFormSchema,
   CreateVersionFormSchema,
@@ -12,6 +14,7 @@ import {
   VersionParamsSchema,
   VersionResponseSchema
 } from '../dtos/document.dto'
+import { bearerAuthMiddleware } from '../middleware/auth.middleware'
 import type { AppEnvironment } from '../types/app.types'
 
 const jsonContent = (schema: typeof ErrorEnvelopeSchema) => ({
@@ -220,8 +223,28 @@ const downloadVersionRoute = createRoute({
 
 export function registerDocumentRoutes(
   app: OpenAPIHono<AppEnvironment>,
-  controller: DocumentController
+  dependencies: { controller: DocumentController; apiKey: string }
 ): void {
+  const { controller, apiKey } = dependencies
+  app.use('/v1/*', bearerAuthMiddleware(apiKey))
+
+  const uploadLimit = bodyLimit({
+    maxSize: MAX_REQUEST_BYTES,
+    onError: (context) =>
+      context.json(
+        {
+          error: {
+            code: ERROR_CODES.payloadTooLarge,
+            message: 'The multipart request is too large',
+            requestId: context.get('requestId')
+          }
+        },
+        413
+      )
+  })
+  app.use('/v1/documents', uploadLimit)
+  app.use('/v1/documents/*/versions', uploadLimit)
+
   app.openapi(createDocumentRoute, async (context) => {
     const form = context.req.valid('form')
     const data = await controller.create(form.file, form.title)
