@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2025",
+    "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "rootDir": ".",
@@ -16,5 +16,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
 }

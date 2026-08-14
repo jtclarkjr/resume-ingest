@@ -1,0 +1,9 @@
+.env*
+.git
+.vercel
+coverage
+dist
+graphify-out
+node_modules
+scripts
+tests

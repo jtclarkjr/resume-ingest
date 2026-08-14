@@ -7,6 +7,7 @@
   },
   "rules": {
     "no-console": "off",
+    "no-underscore-dangle": ["warn", { "allow": ["_id"] }],
     "unicorn/no-process-exit": "off"
   },
   "overrides": [
