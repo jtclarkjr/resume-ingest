@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { createApplication } from '@/app'
 import {
   FakeResumeParser,
+  FakeResumeWorkCombiner,
   FakeResumeTextExtractor,
   InMemoryBlobStorage,
   InMemoryDocumentRepository
@@ -15,15 +16,25 @@ function createSubject() {
   const storage = new InMemoryBlobStorage()
   const extractor = new FakeResumeTextExtractor()
   const parser = new FakeResumeParser()
+  const workCombiner = new FakeResumeWorkCombiner()
   const app = createApplication({
     repository,
     storage,
     extractor,
     parser,
+    workCombiner,
     apiKey: API_KEY
   })
   const authorization = { Authorization: `Bearer ${API_KEY}` }
-  return { app, authorization, repository, storage, extractor, parser }
+  return {
+    app,
+    authorization,
+    repository,
+    storage,
+    extractor,
+    parser,
+    workCombiner
+  }
 }
 
 function uploadBody(file: File, field?: { name: string; value: string }) {
@@ -70,6 +81,13 @@ describe('public documentation routes', () => {
       parseRevision: { type: 'integer', exclusiveMinimum: 0 },
       data: { $ref: '#/components/schemas/ResumeData' }
     })
+    expect(
+      spec.components.schemas.ResumeWorkAggregate.properties
+    ).toMatchObject({
+      work: { type: 'array' },
+      model: { type: 'string' },
+      sources: { type: 'array' }
+    })
 
     for (const [path, item] of Object.entries<any>(spec.paths)) {
       if (!path.startsWith('/v1/')) continue
@@ -111,6 +129,9 @@ describe('public documentation routes', () => {
       },
       '/v1/documents/{documentId}/versions/{version}/reparse': {
         post: [200, 400, 401, 404, 422, 500, 502, 503]
+      },
+      '/v1/resume/work': {
+        get: [200, 401, 500, 502, 503]
       }
     }
     for (const [path, operations] of Object.entries(expectedStatuses)) {
@@ -241,6 +262,64 @@ describe('document HTTP routes', () => {
     expect(response.status).toBe(415)
     expect(await response.json()).toMatchObject({
       error: { code: 'UNSUPPORTED_MEDIA_TYPE', requestId: expect.any(String) }
+    })
+  })
+
+  test('returns a cached combined work history and refreshes it after upload', async () => {
+    const { app, authorization, workCombiner } = createSubject()
+    const createdResponse = await app.request('/v1/documents', {
+      method: 'POST',
+      headers: authorization,
+      body: uploadBody(pdfFile())
+    })
+    const created = (await createdResponse.json()) as any
+
+    const firstResponse = await app.request('/v1/resume/work', {
+      headers: authorization
+    })
+    expect(firstResponse.status).toBe(200)
+    expect(firstResponse.headers.get('cache-control')).toBe('private, no-store')
+    const first = (await firstResponse.json()) as any
+    expect(first.data.work).toHaveLength(1)
+    expect(first.data.model).toBe(workCombiner.model)
+    expect(first.data.generatedAt).toBeString()
+    expect(first.data.sources).toEqual([
+      expect.objectContaining({
+        documentId: created.data.id,
+        version: 1,
+        parseRevision: 1
+      })
+    ])
+    expect(first.data).not.toHaveProperty('usage')
+    expect(first.data).not.toHaveProperty('fingerprint')
+
+    const cachedResponse = await app.request('/v1/resume/work', {
+      headers: authorization
+    })
+    expect(cachedResponse.status).toBe(200)
+    expect(workCombiner.sources).toHaveLength(1)
+
+    await app.request(`/v1/documents/${created.data.id}/versions`, {
+      method: 'POST',
+      headers: authorization,
+      body: uploadBody(docxFile())
+    })
+    const refreshedResponse = await app.request('/v1/resume/work', {
+      headers: authorization
+    })
+    expect(refreshedResponse.status).toBe(200)
+    expect(
+      ((await refreshedResponse.json()) as any).data.sources[0].version
+    ).toBe(2)
+    expect(workCombiner.sources).toHaveLength(2)
+  })
+
+  test('protects the combined work endpoint with bearer authentication', async () => {
+    const { app } = createSubject()
+    const response = await app.request('/v1/resume/work')
+    expect(response.status).toBe(401)
+    expect(await response.json()).toMatchObject({
+      error: { code: 'UNAUTHORIZED' }
     })
   })
 })

@@ -16,6 +16,13 @@ import type {
   ValidatedDocumentFile
 } from '@/types/document.types'
 import type { PendingParseInput } from '@/repositories/document.repository'
+import type {
+  ResumeWorkAggregateCacheRecord,
+  ResumeWorkAggregateReady,
+  ResumeWorkCombineResult,
+  ResumeWorkCombiner,
+  ResumeWorkSource
+} from '@/types/resume-work.types'
 import { encodeDocumentCursor, encodeVersionCursor } from '@/utils/cursor'
 import { sampleParseResult } from './resume'
 
@@ -23,6 +30,7 @@ export class InMemoryDocumentRepository implements DocumentRepository {
   readonly documents = new Map<string, DocumentRecord>()
   readonly versions = new Map<string, DocumentVersionRecord>()
   readonly parses = new Map<string, DocumentVersionParseRecord>()
+  resumeWorkAggregate: ResumeWorkAggregateCacheRecord | null = null
   failCreate = false
 
   async createInitial(
@@ -263,6 +271,98 @@ export class InMemoryDocumentRepository implements DocumentRepository {
     }
   }
 
+  async listCurrentReadyWorkSources(): Promise<ResumeWorkSource[]> {
+    return [...this.documents.values()]
+      .toSorted((left, right) => left._id.localeCompare(right._id))
+      .flatMap((document) => {
+        const version = this.versions.get(
+          this.key(document._id, document.currentVersion)
+        )
+        if (version?.status !== 'ready') return []
+        const parse = [...this.parses.values()]
+          .filter(
+            (candidate) =>
+              candidate.documentId === document._id &&
+              candidate.version === version.version &&
+              candidate.revision === version.currentParseRevision &&
+              candidate.status === 'ready' &&
+              candidate.data
+          )
+          .at(0)
+        if (!parse?.data) return []
+        return [
+          {
+            documentId: document._id,
+            version: version.version,
+            parseRevision: parse.revision,
+            sourceSha256: parse.sourceSha256,
+            work: structuredClone(parse.data.work)
+          }
+        ]
+      })
+  }
+
+  async findResumeWorkAggregate(): Promise<ResumeWorkAggregateCacheRecord | null> {
+    return this.resumeWorkAggregate
+      ? structuredClone(this.resumeWorkAggregate)
+      : null
+  }
+
+  async tryAcquireResumeWorkGeneration(
+    fingerprint: string,
+    owner: string,
+    startedAt: Date,
+    leaseUntil: Date
+  ): Promise<boolean> {
+    const cache = this.resumeWorkAggregate
+    if (cache?.ready?.fingerprint === fingerprint) return false
+    if (cache?.generation && cache.generation.leaseUntil > startedAt) {
+      return false
+    }
+    this.resumeWorkAggregate = {
+      _id: 'global',
+      ...(cache?.ready ? { ready: structuredClone(cache.ready) } : {}),
+      generation: { fingerprint, owner, startedAt, leaseUntil },
+      updatedAt: startedAt
+    }
+    return true
+  }
+
+  async completeResumeWorkGeneration(
+    fingerprint: string,
+    owner: string,
+    ready: ResumeWorkAggregateReady
+  ): Promise<boolean> {
+    const generation = this.resumeWorkAggregate?.generation
+    if (generation?.fingerprint !== fingerprint || generation.owner !== owner) {
+      return false
+    }
+    this.resumeWorkAggregate = {
+      _id: 'global',
+      ready: structuredClone(ready),
+      updatedAt: ready.generatedAt
+    }
+    return true
+  }
+
+  async releaseResumeWorkGeneration(
+    fingerprint: string,
+    owner: string
+  ): Promise<void> {
+    const cache = this.resumeWorkAggregate
+    if (
+      cache?.generation?.fingerprint !== fingerprint ||
+      cache.generation.owner !== owner
+    ) {
+      return
+    }
+    this.resumeWorkAggregate = {
+      _id: 'global',
+      ...(cache.ready ? { ready: cache.ready } : {}),
+      updatedAt: new Date()
+    }
+  }
+
   async ensureIndexes(): Promise<void> {}
 
   private key(documentId: string, version: number): string {
@@ -332,5 +432,25 @@ export class FakeResumeParser implements ResumeParser {
     this.texts.push(text)
     if (this.error) throw this.error
     return structuredClone(this.result)
+  }
+}
+
+export class FakeResumeWorkCombiner implements ResumeWorkCombiner {
+  readonly model = 'openai/gpt-5.4-mini'
+  readonly sources: ResumeWorkSource[][] = []
+  result: ResumeWorkCombineResult | undefined
+  error: Error | undefined
+
+  async combine(sources: ResumeWorkSource[]): Promise<ResumeWorkCombineResult> {
+    this.sources.push(structuredClone(sources))
+    if (this.error) throw this.error
+    return structuredClone(
+      this.result ?? {
+        model: this.model,
+        work: sources.flatMap((source) => source.work),
+        warnings: [],
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 }
+      }
+    )
   }
 }

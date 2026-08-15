@@ -7,6 +7,11 @@ import type {
   Page,
   ResumeParseResult
 } from '../types/document.types'
+import type {
+  ResumeWorkAggregateCacheRecord,
+  ResumeWorkAggregateReady,
+  ResumeWorkSource
+} from '../types/resume-work.types'
 
 export type PendingVersionInput = Omit<
   DocumentVersionRecord,
@@ -73,5 +78,19 @@ export interface DocumentRepository {
     limit: number,
     beforeVersion?: number
   ): Promise<Page<DocumentVersionRecord>>
+  listCurrentReadyWorkSources(): Promise<ResumeWorkSource[]>
+  findResumeWorkAggregate(): Promise<ResumeWorkAggregateCacheRecord | null>
+  tryAcquireResumeWorkGeneration(
+    fingerprint: string,
+    owner: string,
+    startedAt: Date,
+    leaseUntil: Date
+  ): Promise<boolean>
+  completeResumeWorkGeneration(
+    fingerprint: string,
+    owner: string,
+    ready: ResumeWorkAggregateReady
+  ): Promise<boolean>
+  releaseResumeWorkGeneration(fingerprint: string, owner: string): Promise<void>
   ensureIndexes(): Promise<void>
 }

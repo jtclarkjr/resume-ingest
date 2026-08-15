@@ -174,5 +174,6 @@ export const ParsedResumeSchema = z
   .openapi('ParsedResume')
 
 export type ResumeData = z.infer<typeof ResumeDataSchema>
+export type ResumeWork = z.infer<typeof ResumeWorkSchema>
 export type ResumeParserOutput = z.infer<typeof ResumeParserOutputSchema>
 export type ParsedResume = z.infer<typeof ParsedResumeSchema>

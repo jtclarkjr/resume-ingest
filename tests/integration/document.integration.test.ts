@@ -3,12 +3,18 @@ import { closeMongoConnection, getMongoContext } from '@/db/mongodb'
 import { MongoDocumentRepository } from '@/repositories/mongo-document.repository'
 import { VercelBlobStorage } from '@/services/blob-storage.service'
 import { DocumentService } from '@/services/document.service'
+import { ResumeWorkAggregateService } from '@/services/resume-work-aggregate.service'
 import type {
   DocumentRecord,
   DocumentVersionRecord
 } from '@/types/document.types'
+import type { ResumeWorkAggregateCacheRecord } from '@/types/resume-work.types'
 import { docxFile, pdfFile } from '../helpers/files'
-import { FakeResumeParser, FakeResumeTextExtractor } from '../helpers/fakes'
+import {
+  FakeResumeParser,
+  FakeResumeTextExtractor,
+  FakeResumeWorkCombiner
+} from '../helpers/fakes'
 
 const enabled = process.env.RUN_INTEGRATION_TESTS === '1'
 const integrationDescribe = enabled ? describe : describe.skip
@@ -54,6 +60,12 @@ integrationDescribe('MongoDB and private Vercel Blob integration', () => {
       await db.collection<DocumentRecord>('documents').deleteOne({
         _id: documentId
       })
+      await db
+        .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
+        .deleteOne({
+          _id: 'global',
+          'ready.sources.documentId': documentId
+        })
     } finally {
       await closeMongoConnection()
     }
@@ -74,6 +86,24 @@ integrationDescribe('MongoDB and private Vercel Blob integration', () => {
     )
     expect(updated.document.currentVersion).toBe(2)
     expect(updated.parsedResume?.parseRevision).toBe(1)
+
+    const sources = await repository.listCurrentReadyWorkSources()
+    expect(sources).toEqual([
+      expect.objectContaining({
+        documentId,
+        version: 2,
+        parseRevision: 1
+      })
+    ])
+    const aggregate = await new ResumeWorkAggregateService(
+      repository,
+      new FakeResumeWorkCombiner()
+    ).getCombinedWork()
+    expect(aggregate.sources[0]).toMatchObject({
+      documentId,
+      version: 2,
+      parseRevision: 1
+    })
 
     const versions = await service.listVersions(documentId)
     expect(versions.items.map((version) => version.version)).toEqual([2, 1])

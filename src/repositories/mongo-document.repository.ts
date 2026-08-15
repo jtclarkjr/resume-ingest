@@ -1,4 +1,4 @@
-import type { Filter } from 'mongodb'
+import { MongoServerError, type Filter } from 'mongodb'
 import { getMongoContext, type MongoContext } from '../db/mongodb'
 import type {
   DocumentListCursor,
@@ -8,6 +8,11 @@ import type {
   Page,
   ResumeParseResult
 } from '../types/document.types'
+import type {
+  ResumeWorkAggregateCacheRecord,
+  ResumeWorkAggregateReady,
+  ResumeWorkSource
+} from '../types/resume-work.types'
 import type {
   DocumentRepository,
   PendingParseInput,
@@ -397,6 +402,157 @@ export class MongoDocumentRepository implements DocumentRepository {
       items,
       nextCursor: hasMore && last ? encodeVersionCursor(last.version) : null
     }
+  }
+
+  async listCurrentReadyWorkSources(): Promise<ResumeWorkSource[]> {
+    const { db } = await this.getContext()
+    return db
+      .collection<DocumentRecord>('documents')
+      .aggregate<ResumeWorkSource>([
+        { $sort: { _id: 1 } },
+        {
+          $lookup: {
+            from: 'document_versions',
+            let: { documentId: '$_id', version: '$currentVersion' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$documentId', '$$documentId'] },
+                      { $eq: ['$version', '$$version'] },
+                      { $eq: ['$status', 'ready'] }
+                    ]
+                  }
+                }
+              },
+              { $limit: 1 }
+            ],
+            as: 'versions'
+          }
+        },
+        { $unwind: '$versions' },
+        {
+          $lookup: {
+            from: 'document_version_parses',
+            let: {
+              documentId: '$_id',
+              version: '$versions.version',
+              revision: '$versions.currentParseRevision'
+            },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$documentId', '$$documentId'] },
+                      { $eq: ['$version', '$$version'] },
+                      { $eq: ['$revision', '$$revision'] },
+                      { $eq: ['$status', 'ready'] }
+                    ]
+                  }
+                }
+              },
+              { $limit: 1 }
+            ],
+            as: 'parses'
+          }
+        },
+        { $unwind: '$parses' },
+        {
+          $project: {
+            _id: 0,
+            documentId: '$_id',
+            version: '$versions.version',
+            parseRevision: '$parses.revision',
+            sourceSha256: '$parses.sourceSha256',
+            work: '$parses.data.work'
+          }
+        }
+      ])
+      .toArray()
+  }
+
+  async findResumeWorkAggregate(): Promise<ResumeWorkAggregateCacheRecord | null> {
+    const { db } = await this.getContext()
+    return db
+      .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
+      .findOne({ _id: 'global' })
+  }
+
+  async tryAcquireResumeWorkGeneration(
+    fingerprint: string,
+    owner: string,
+    startedAt: Date,
+    leaseUntil: Date
+  ): Promise<boolean> {
+    const { db } = await this.getContext()
+    try {
+      const result = await db
+        .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
+        .updateOne(
+          {
+            _id: 'global',
+            'ready.fingerprint': { $ne: fingerprint },
+            $or: [
+              { generation: { $exists: false } },
+              { 'generation.leaseUntil': { $lte: startedAt } }
+            ]
+          },
+          {
+            $set: {
+              generation: { fingerprint, owner, startedAt, leaseUntil },
+              updatedAt: startedAt
+            },
+            $setOnInsert: { _id: 'global' }
+          },
+          { upsert: true }
+        )
+      return result.matchedCount + result.upsertedCount === 1
+    } catch (error) {
+      if (error instanceof MongoServerError && error.code === 11000)
+        return false
+      throw error
+    }
+  }
+
+  async completeResumeWorkGeneration(
+    fingerprint: string,
+    owner: string,
+    ready: ResumeWorkAggregateReady
+  ): Promise<boolean> {
+    const { db } = await this.getContext()
+    const result = await db
+      .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
+      .updateOne(
+        {
+          _id: 'global',
+          'generation.fingerprint': fingerprint,
+          'generation.owner': owner
+        },
+        {
+          $set: { ready, updatedAt: ready.generatedAt },
+          $unset: { generation: '' }
+        }
+      )
+    return result.modifiedCount === 1
+  }
+
+  async releaseResumeWorkGeneration(
+    fingerprint: string,
+    owner: string
+  ): Promise<void> {
+    const { db } = await this.getContext()
+    await db
+      .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
+      .updateOne(
+        {
+          _id: 'global',
+          'generation.fingerprint': fingerprint,
+          'generation.owner': owner
+        },
+        { $unset: { generation: '' }, $set: { updatedAt: new Date() } }
+      )
   }
 
   async ensureIndexes(): Promise<void> {

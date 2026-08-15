@@ -8,6 +8,10 @@ export const MAX_EXTRACTED_TEXT_CHARS = 200_000
 export const RESUME_PARSER_TIMEOUT_MS = 60_000
 export const RESUME_SCHEMA_VERSION = '1.0'
 export const RESUME_PARSER_VERSION = 'resume-json-v1'
+export const RESUME_WORK_COMBINER_VERSION = 'resume-work-v1'
+export const RESUME_WORK_GENERATION_LEASE_MS = 70_000
+export const RESUME_WORK_GENERATION_WAIT_MS = 65_000
+export const RESUME_WORK_GENERATION_POLL_MS = 100
 export const DEFAULT_RESUME_PARSER_MODEL = 'openai/gpt-5.4-mini'
 
 export const SUPPORTED_DOCUMENT_TYPES = {
@@ -27,6 +31,8 @@ export const ERROR_CODES = {
   versionNotFound: 'VERSION_NOT_FOUND',
   extraction: 'DOCUMENT_EXTRACTION_FAILED',
   parser: 'RESUME_PARSE_FAILED',
+  workAggregation: 'RESUME_WORK_AGGREGATION_FAILED',
+  workAggregationBusy: 'RESUME_WORK_AGGREGATION_BUSY',
   storage: 'STORAGE_ERROR',
   database: 'DATABASE_ERROR',
   internal: 'INTERNAL_ERROR'

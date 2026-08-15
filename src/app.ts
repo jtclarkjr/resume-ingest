@@ -11,12 +11,14 @@ import type {
   ResumeParser,
   ResumeTextExtractor
 } from './types/document.types'
+import type { ResumeWorkCombiner } from './types/resume-work.types'
 
 export interface ApplicationDependencies {
   repository: DocumentRepository
   storage: BlobStorage
   extractor: ResumeTextExtractor
   parser: ResumeParser
+  workCombiner: ResumeWorkCombiner
   apiKey: string
 }
 
