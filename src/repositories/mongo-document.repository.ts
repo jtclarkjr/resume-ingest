@@ -11,6 +11,8 @@ import type {
 import type {
   ResumeWorkAggregateCacheRecord,
   ResumeWorkAggregateReady,
+  ResumeWorkCacheId,
+  ResumeWorkLanguage,
   ResumeWorkSource
 } from '../types/resume-work.types'
 import type {
@@ -279,6 +281,7 @@ export class MongoDocumentRepository implements DocumentRepository {
               $set: {
                 status: 'ready',
                 model: result.model,
+                isJapaneseShokumuKeirekisho: result.isJapaneseShokumuKeirekisho,
                 data: result.data,
                 warnings: result.warnings,
                 usage: result.usage,
@@ -404,7 +407,9 @@ export class MongoDocumentRepository implements DocumentRepository {
     }
   }
 
-  async listCurrentReadyWorkSources(): Promise<ResumeWorkSource[]> {
+  async listCurrentReadyWorkSources(
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkSource[]> {
     const { db } = await this.getContext()
     return db
       .collection<DocumentRecord>('documents')
@@ -459,6 +464,9 @@ export class MongoDocumentRepository implements DocumentRepository {
           }
         },
         { $unwind: '$parses' },
+        ...(language === 'ja'
+          ? [{ $match: { 'parses.isJapaneseShokumuKeirekisho': true } }]
+          : []),
         {
           $project: {
             _id: 0,
@@ -473,14 +481,17 @@ export class MongoDocumentRepository implements DocumentRepository {
       .toArray()
   }
 
-  async findResumeWorkAggregate(): Promise<ResumeWorkAggregateCacheRecord | null> {
+  async findResumeWorkAggregate(
+    cacheId: ResumeWorkCacheId
+  ): Promise<ResumeWorkAggregateCacheRecord | null> {
     const { db } = await this.getContext()
     return db
       .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
-      .findOne({ _id: 'global' })
+      .findOne({ _id: cacheId })
   }
 
   async tryAcquireResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string,
     startedAt: Date,
@@ -492,7 +503,7 @@ export class MongoDocumentRepository implements DocumentRepository {
         .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
         .updateOne(
           {
-            _id: 'global',
+            _id: cacheId,
             'ready.fingerprint': { $ne: fingerprint },
             $or: [
               { generation: { $exists: false } },
@@ -504,7 +515,7 @@ export class MongoDocumentRepository implements DocumentRepository {
               generation: { fingerprint, owner, startedAt, leaseUntil },
               updatedAt: startedAt
             },
-            $setOnInsert: { _id: 'global' }
+            $setOnInsert: { _id: cacheId }
           },
           { upsert: true }
         )
@@ -517,6 +528,7 @@ export class MongoDocumentRepository implements DocumentRepository {
   }
 
   async completeResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string,
     ready: ResumeWorkAggregateReady
@@ -526,7 +538,7 @@ export class MongoDocumentRepository implements DocumentRepository {
       .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
       .updateOne(
         {
-          _id: 'global',
+          _id: cacheId,
           'generation.fingerprint': fingerprint,
           'generation.owner': owner
         },
@@ -539,6 +551,7 @@ export class MongoDocumentRepository implements DocumentRepository {
   }
 
   async releaseResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string
   ): Promise<void> {
@@ -547,7 +560,7 @@ export class MongoDocumentRepository implements DocumentRepository {
       .collection<ResumeWorkAggregateCacheRecord>('resume_work_aggregates')
       .updateOne(
         {
-          _id: 'global',
+          _id: cacheId,
           'generation.fingerprint': fingerprint,
           'generation.owner': owner
         },

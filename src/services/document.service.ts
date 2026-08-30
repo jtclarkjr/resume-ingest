@@ -536,6 +536,7 @@ export class DocumentService {
       parserVersion: RESUME_PARSER_VERSION,
       model: parsed.model,
       sourceSha256,
+      isJapaneseShokumuKeirekisho: parsed.isJapaneseShokumuKeirekisho,
       data: parsed.data,
       warnings: parsed.warnings,
       usage: parsed.usage,
@@ -556,6 +557,7 @@ export class DocumentService {
       parseRevision: parse.revision,
       parsedAt: parse.parsedAt.toISOString(),
       sourceSha256: parse.sourceSha256,
+      isJapaneseShokumuKeirekisho: parse.isJapaneseShokumuKeirekisho ?? false,
       warnings: parse.warnings ?? [],
       data: parse.data
     }

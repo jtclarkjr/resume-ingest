@@ -83,6 +83,7 @@ export interface DocumentVersionParseRecord {
   parserVersion: string
   model: string
   sourceSha256: string
+  isJapaneseShokumuKeirekisho?: boolean
   data?: ResumeData
   warnings?: string[]
   usage?: ResumeTokenUsage
@@ -94,6 +95,7 @@ export interface DocumentVersionParseRecord {
 
 export interface ResumeParseResult {
   model: string
+  isJapaneseShokumuKeirekisho: boolean
   data: ResumeData
   warnings: string[]
   usage: ResumeTokenUsage

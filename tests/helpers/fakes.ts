@@ -19,8 +19,10 @@ import type { PendingParseInput } from '@/repositories/document.repository'
 import type {
   ResumeWorkAggregateCacheRecord,
   ResumeWorkAggregateReady,
+  ResumeWorkCacheId,
   ResumeWorkCombineResult,
   ResumeWorkCombiner,
+  ResumeWorkLanguage,
   ResumeWorkSource
 } from '@/types/resume-work.types'
 import { encodeDocumentCursor, encodeVersionCursor } from '@/utils/cursor'
@@ -30,7 +32,13 @@ export class InMemoryDocumentRepository implements DocumentRepository {
   readonly documents = new Map<string, DocumentRecord>()
   readonly versions = new Map<string, DocumentVersionRecord>()
   readonly parses = new Map<string, DocumentVersionParseRecord>()
-  resumeWorkAggregate: ResumeWorkAggregateCacheRecord | null = null
+  readonly resumeWorkAggregates = new Map<
+    ResumeWorkCacheId,
+    ResumeWorkAggregateCacheRecord
+  >()
+  get resumeWorkAggregate(): ResumeWorkAggregateCacheRecord | null {
+    return this.resumeWorkAggregates.get('global') ?? null
+  }
   failCreate = false
 
   async createInitial(
@@ -189,6 +197,7 @@ export class InMemoryDocumentRepository implements DocumentRepository {
     Object.assign(parse, {
       status: 'ready' as const,
       model: result.model,
+      isJapaneseShokumuKeirekisho: result.isJapaneseShokumuKeirekisho,
       data: structuredClone(result.data),
       warnings: [...result.warnings],
       usage: structuredClone(result.usage),
@@ -271,7 +280,9 @@ export class InMemoryDocumentRepository implements DocumentRepository {
     }
   }
 
-  async listCurrentReadyWorkSources(): Promise<ResumeWorkSource[]> {
+  async listCurrentReadyWorkSources(
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkSource[]> {
     return [...this.documents.values()]
       .toSorted((left, right) => left._id.localeCompare(right._id))
       .flatMap((document) => {
@@ -286,7 +297,9 @@ export class InMemoryDocumentRepository implements DocumentRepository {
               candidate.version === version.version &&
               candidate.revision === version.currentParseRevision &&
               candidate.status === 'ready' &&
-              candidate.data
+              candidate.data &&
+              (language !== 'ja' ||
+                candidate.isJapaneseShokumuKeirekisho === true)
           )
           .at(0)
         if (!parse?.data) return []
@@ -302,65 +315,69 @@ export class InMemoryDocumentRepository implements DocumentRepository {
       })
   }
 
-  async findResumeWorkAggregate(): Promise<ResumeWorkAggregateCacheRecord | null> {
-    return this.resumeWorkAggregate
-      ? structuredClone(this.resumeWorkAggregate)
-      : null
+  async findResumeWorkAggregate(
+    cacheId: ResumeWorkCacheId
+  ): Promise<ResumeWorkAggregateCacheRecord | null> {
+    const cache = this.resumeWorkAggregates.get(cacheId)
+    return cache ? structuredClone(cache) : null
   }
 
   async tryAcquireResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string,
     startedAt: Date,
     leaseUntil: Date
   ): Promise<boolean> {
-    const cache = this.resumeWorkAggregate
+    const cache = this.resumeWorkAggregates.get(cacheId)
     if (cache?.ready?.fingerprint === fingerprint) return false
     if (cache?.generation && cache.generation.leaseUntil > startedAt) {
       return false
     }
-    this.resumeWorkAggregate = {
-      _id: 'global',
+    this.resumeWorkAggregates.set(cacheId, {
+      _id: cacheId,
       ...(cache?.ready ? { ready: structuredClone(cache.ready) } : {}),
       generation: { fingerprint, owner, startedAt, leaseUntil },
       updatedAt: startedAt
-    }
+    })
     return true
   }
 
   async completeResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string,
     ready: ResumeWorkAggregateReady
   ): Promise<boolean> {
-    const generation = this.resumeWorkAggregate?.generation
+    const generation = this.resumeWorkAggregates.get(cacheId)?.generation
     if (generation?.fingerprint !== fingerprint || generation.owner !== owner) {
       return false
     }
-    this.resumeWorkAggregate = {
-      _id: 'global',
+    this.resumeWorkAggregates.set(cacheId, {
+      _id: cacheId,
       ready: structuredClone(ready),
       updatedAt: ready.generatedAt
-    }
+    })
     return true
   }
 
   async releaseResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string
   ): Promise<void> {
-    const cache = this.resumeWorkAggregate
+    const cache = this.resumeWorkAggregates.get(cacheId)
     if (
       cache?.generation?.fingerprint !== fingerprint ||
       cache.generation.owner !== owner
     ) {
       return
     }
-    this.resumeWorkAggregate = {
-      _id: 'global',
+    this.resumeWorkAggregates.set(cacheId, {
+      _id: cacheId,
       ...(cache.ready ? { ready: cache.ready } : {}),
       updatedAt: new Date()
-    }
+    })
   }
 
   async ensureIndexes(): Promise<void> {}
@@ -438,11 +455,16 @@ export class FakeResumeParser implements ResumeParser {
 export class FakeResumeWorkCombiner implements ResumeWorkCombiner {
   readonly model = 'openai/gpt-5.4-mini'
   readonly sources: ResumeWorkSource[][] = []
+  readonly languages: Array<ResumeWorkLanguage | undefined> = []
   result: ResumeWorkCombineResult | undefined
   error: Error | undefined
 
-  async combine(sources: ResumeWorkSource[]): Promise<ResumeWorkCombineResult> {
+  async combine(
+    sources: ResumeWorkSource[],
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkCombineResult> {
     this.sources.push(structuredClone(sources))
+    this.languages.push(language)
     if (this.error) throw this.error
     return structuredClone(
       this.result ?? {

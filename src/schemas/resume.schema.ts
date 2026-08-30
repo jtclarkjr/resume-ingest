@@ -151,13 +151,14 @@ export const ResumeDataSchema = z
 
 export const ResumeParserOutputSchema = z.object({
   data: ResumeDataSchema,
+  isJapaneseShokumuKeirekisho: z.boolean(),
   warnings: z.array(z.string()).max(50)
 })
 
 export const ParsedResumeSchema = z
   .object({
     schemaVersion: z.string().openapi({ example: '1.0' }),
-    parserVersion: z.string().openapi({ example: 'resume-json-v1' }),
+    parserVersion: z.string().openapi({ example: 'resume-json-v2' }),
     model: z.string().openapi({ example: 'openai/gpt-5.4-mini' }),
     parseRevision: z.number().int().positive().openapi({ example: 1 }),
     parsedAt: z.iso.datetime().openapi({ example: '2026-08-14T10:00:00.000Z' }),
@@ -168,6 +169,10 @@ export const ParsedResumeSchema = z
         example:
           '7f83b1657ff1fc53b92dc18148a1d65dfa13514f2d891ef3214cfe46fda14f67'
       }),
+    isJapaneseShokumuKeirekisho: z.boolean().openapi({
+      description: 'Verified Japanese 職務経歴書 classification.',
+      example: true
+    }),
     warnings: z.array(z.string()),
     data: ResumeDataSchema
   })

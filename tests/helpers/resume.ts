@@ -50,6 +50,7 @@ export function sampleParseResult(
 ): ResumeParseResult {
   return {
     model,
+    isJapaneseShokumuKeirekisho: false,
     data: sampleResumeData(),
     warnings: [],
     usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 }

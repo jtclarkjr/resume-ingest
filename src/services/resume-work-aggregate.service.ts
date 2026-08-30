@@ -9,7 +9,9 @@ import { AppError } from '../errors/app-error'
 import type { DocumentRepository } from '../repositories/document.repository'
 import type {
   ResumeWorkAggregateReady,
+  ResumeWorkCacheId,
   ResumeWorkCombiner,
+  ResumeWorkLanguage,
   ResumeWorkSource,
   ResumeWorkSourceReference
 } from '../types/resume-work.types'
@@ -43,18 +45,22 @@ export class ResumeWorkAggregateService {
     private readonly combiner: ResumeWorkCombiner
   ) {}
 
-  async getCombinedWork(): Promise<ResumeWorkAggregateReady> {
+  async getCombinedWork(
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkAggregateReady> {
     return this.getCombinedWorkBefore(
-      Date.now() + RESUME_WORK_GENERATION_WAIT_MS
+      Date.now() + RESUME_WORK_GENERATION_WAIT_MS,
+      language
     )
   }
 
   private async getCombinedWorkBefore(
-    deadline: number
+    deadline: number,
+    language?: ResumeWorkLanguage
   ): Promise<ResumeWorkAggregateReady> {
     let sources: ResumeWorkSource[]
     try {
-      sources = await this.repository.listCurrentReadyWorkSources()
+      sources = await this.repository.listCurrentReadyWorkSources(language)
     } catch (error) {
       throw new AppError(
         ERROR_CODES.database,
@@ -63,12 +69,21 @@ export class ResumeWorkAggregateService {
         error instanceof Error ? error.message : 'DatabaseError'
       )
     }
+    if (language === 'ja' && sources.length === 0) {
+      throw new AppError(
+        ERROR_CODES.japaneseShokumuKeirekishoRequired,
+        'No current document has a verified Japanese 職務経歴書 parse',
+        422
+      )
+    }
+    const cacheId: ResumeWorkCacheId = language ?? 'global'
 
     const references = sources.map(sourceReference)
     const fingerprint = await sha256(
       JSON.stringify({
         combinerVersion: RESUME_WORK_COMBINER_VERSION,
         model: this.combiner.model,
+        language: language ?? null,
         sources: references
       })
     )
@@ -77,7 +92,7 @@ export class ResumeWorkAggregateService {
     while (Date.now() < deadline) {
       let cached
       try {
-        cached = await this.repository.findResumeWorkAggregate()
+        cached = await this.repository.findResumeWorkAggregate(cacheId)
       } catch (error) {
         throw new AppError(
           ERROR_CODES.database,
@@ -92,6 +107,7 @@ export class ResumeWorkAggregateService {
       let acquired: boolean
       try {
         acquired = await this.repository.tryAcquireResumeWorkGeneration(
+          cacheId,
           fingerprint,
           owner,
           startedAt,
@@ -114,7 +130,7 @@ export class ResumeWorkAggregateService {
       let combined
       try {
         combined = sources.length
-          ? await this.combiner.combine(sources)
+          ? await this.combiner.combine(sources, language)
           : {
               model: this.combiner.model,
               work: [],
@@ -126,7 +142,7 @@ export class ResumeWorkAggregateService {
               }
             }
       } catch (error) {
-        await this.release(fingerprint, owner)
+        await this.release(cacheId, fingerprint, owner)
         if (error instanceof AppError) throw error
         throw new AppError(
           ERROR_CODES.workAggregation,
@@ -148,15 +164,16 @@ export class ResumeWorkAggregateService {
       }
       try {
         const completed = await this.repository.completeResumeWorkGeneration(
+          cacheId,
           fingerprint,
           owner,
           ready
         )
         if (completed) return ready
-        await this.release(fingerprint, owner)
-        return this.getCombinedWorkBefore(deadline)
+        await this.release(cacheId, fingerprint, owner)
+        return this.getCombinedWorkBefore(deadline, language)
       } catch (error) {
-        await this.release(fingerprint, owner)
+        await this.release(cacheId, fingerprint, owner)
         if (error instanceof AppError) throw error
         throw new AppError(
           ERROR_CODES.database,
@@ -174,9 +191,17 @@ export class ResumeWorkAggregateService {
     )
   }
 
-  private async release(fingerprint: string, owner: string): Promise<void> {
+  private async release(
+    cacheId: ResumeWorkCacheId,
+    fingerprint: string,
+    owner: string
+  ): Promise<void> {
     try {
-      await this.repository.releaseResumeWorkGeneration(fingerprint, owner)
+      await this.repository.releaseResumeWorkGeneration(
+        cacheId,
+        fingerprint,
+        owner
+      )
     } catch {
       // Preserve the original generation error; the lease expires automatically.
     }

@@ -12,6 +12,7 @@ import type { ResumeTokenUsage } from '../types/document.types'
 import type {
   ResumeWorkCombineResult,
   ResumeWorkCombiner,
+  ResumeWorkLanguage,
   ResumeWorkSource
 } from '../types/resume-work.types'
 
@@ -46,6 +47,13 @@ Security and fidelity rules:
 - Sort current roles first, then completed roles by descending end date and start date.
 - Put source ambiguity or conflicts in warnings; do not include private reasoning.`
 
+const JAPANESE_COMBINER_INSTRUCTIONS = `${COMBINER_INSTRUCTIONS}
+
+Japanese output rules:
+- Write natural-language positions, employment types, locations, summaries, highlights, and warnings in Japanese.
+- Preserve proper names, including official employer, product, and technology names, plus URLs, dates, and numeric metrics from the source.
+- Do not translate by inventing facts or expanding source meaning.`
+
 async function generateResumeWorkOutput(
   request: ResumeWorkGenerationRequest
 ): Promise<ResumeWorkGenerationResponse> {
@@ -77,11 +85,17 @@ export class AiGatewayResumeWorkCombiner implements ResumeWorkCombiner {
     private readonly generate: ResumeWorkGenerationFunction = generateResumeWorkOutput
   ) {}
 
-  async combine(sources: ResumeWorkSource[]): Promise<ResumeWorkCombineResult> {
+  async combine(
+    sources: ResumeWorkSource[],
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkCombineResult> {
     try {
       const result = await this.generate({
         model: this.model,
-        instructions: COMBINER_INSTRUCTIONS,
+        instructions:
+          language === 'ja'
+            ? JAPANESE_COMBINER_INSTRUCTIONS
+            : COMBINER_INSTRUCTIONS,
         prompt: `<resume-work-sources>\n${JSON.stringify(sources)}\n</resume-work-sources>`,
         timeout: RESUME_PARSER_TIMEOUT_MS
       })

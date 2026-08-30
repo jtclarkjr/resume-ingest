@@ -52,6 +52,26 @@ describe('AiGatewayResumeWorkCombiner', () => {
     expect(request?.prompt).not.toContain('"basics"')
   })
 
+  test('adds Japanese prose rules only for Japanese aggregation', async () => {
+    const requests: ResumeWorkGenerationRequest[] = []
+    const combiner = new AiGatewayResumeWorkCombiner(
+      'openai/gpt-5.4-mini',
+      async (input) => {
+        requests.push(input)
+        return { output: { work: source().work, warnings: [] }, usage }
+      }
+    )
+
+    await combiner.combine([source()])
+    await combiner.combine([source()], 'ja')
+
+    expect(requests[0]?.instructions).not.toContain('Japanese output rules')
+    expect(requests[1]?.instructions).toContain('Japanese output rules')
+    expect(requests[1]?.instructions).toContain(
+      'Preserve proper names, including official employer, product, and technology names'
+    )
+  })
+
   test('validates the shared JSON Resume work schema', () => {
     expect(
       ResumeWorkCombineOutputSchema.safeParse({

@@ -1,6 +1,9 @@
 import type { ResumeWork } from '../schemas/resume.schema'
 import type { ResumeTokenUsage } from './document.types'
 
+export type ResumeWorkLanguage = 'ja'
+export type ResumeWorkCacheId = 'global' | ResumeWorkLanguage
+
 export interface ResumeWorkSourceReference {
   documentId: string
   version: number
@@ -21,7 +24,10 @@ export interface ResumeWorkCombineResult {
 
 export interface ResumeWorkCombiner {
   readonly model: string
-  combine(sources: ResumeWorkSource[]): Promise<ResumeWorkCombineResult>
+  combine(
+    sources: ResumeWorkSource[],
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkCombineResult>
 }
 
 export interface ResumeWorkAggregateReady {
@@ -43,7 +49,7 @@ export interface ResumeWorkAggregateGeneration {
 }
 
 export interface ResumeWorkAggregateCacheRecord {
-  _id: 'global'
+  _id: ResumeWorkCacheId
   ready?: ResumeWorkAggregateReady
   generation?: ResumeWorkAggregateGeneration
   updatedAt: Date

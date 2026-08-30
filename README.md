@@ -91,17 +91,17 @@ Public routes:
 
 All `/v1` routes require `Authorization: Bearer <DOCUMENT_API_KEY>`.
 
-| Method | Route                                                  | Description                                     |
-| ------ | ------------------------------------------------------ | ----------------------------------------------- |
-| `POST` | `/v1/documents`                                        | Create a document and version 1                 |
-| `GET`  | `/v1/documents`                                        | Cursor-paginated document list                  |
-| `GET`  | `/v1/documents/:documentId`                            | Document metadata and current version           |
-| `POST` | `/v1/documents/:documentId/versions`                   | Upload the next immutable version               |
-| `GET`  | `/v1/documents/:documentId/versions`                   | Ready versions, newest first                    |
-| `GET`  | `/v1/documents/:documentId/versions/:version`          | One ready version                               |
-| `POST` | `/v1/documents/:documentId/versions/:version/reparse`  | Append and promote a new parse revision         |
-| `GET`  | `/v1/documents/:documentId/versions/:version/download` | Redirect to a five-minute private download URL  |
-| `GET`  | `/v1/resume/work`                                      | AI-combined work history from current documents |
+| Method | Route                                                  | Description                                       |
+| ------ | ------------------------------------------------------ | ------------------------------------------------- |
+| `POST` | `/v1/documents`                                        | Create a document and version 1                   |
+| `GET`  | `/v1/documents`                                        | Cursor-paginated document list                    |
+| `GET`  | `/v1/documents/:documentId`                            | Document metadata and current version             |
+| `POST` | `/v1/documents/:documentId/versions`                   | Upload the next immutable version                 |
+| `GET`  | `/v1/documents/:documentId/versions`                   | Ready versions, newest first                      |
+| `GET`  | `/v1/documents/:documentId/versions/:version`          | One ready version                                 |
+| `POST` | `/v1/documents/:documentId/versions/:version/reparse`  | Append and promote a new parse revision           |
+| `GET`  | `/v1/documents/:documentId/versions/:version/download` | Redirect to a five-minute private download URL    |
+| `GET`  | `/v1/resume/work`                                      | AI-combined work history; `?lang=ja` for Japanese |
 
 Successful JSON responses use `{ "data": ..., "requestId": "..." }`. Errors use
 `{ "error": { "code": "...", "message": "...", "requestId": "..." } }`.
@@ -110,8 +110,19 @@ Pagination accepts `limit` (default `20`, maximum `100`) and an opaque `cursor`
 returned by the previous page.
 
 The combined work endpoint uses the current ready parse from every document. Its
-server-side aggregate is reused until a new upload, version, or reparse changes
-the source fingerprint; the next request then regenerates it with AI.
+default aggregate is reused until a new upload, version, or reparse changes the
+source fingerprint.
+
+Adding `?lang=ja` restricts sources to parses verified as
+Japanese 職務経歴書 and asks the existing combiner for Japanese prose while
+preserving proper names, technologies, URLs, dates, and metrics. Non-qualifying
+documents are ignored in mixed collections. If none qualify, the endpoint
+returns `422 JAPANESE_SHOKUMU_KEIREKISHO_REQUIRED`.
+
+Legacy parses without `isJapaneseShokumuKeirekisho` are unverified and excluded
+from Japanese aggregation. Use the existing reparse endpoint to classify them;
+they are not migrated or reparsed automatically. Default and Japanese aggregates
+use independent cache and generation-lease records.
 
 ## curl examples
 
@@ -148,6 +159,14 @@ Reparse an immutable version with the currently configured model:
 curl --fail-with-body --request POST \
   -H "Authorization: Bearer $RESUME_DOCUMENT_API_KEY" \
   "$RESUME_API_BASE_URL/v1/documents/$DOCUMENT_ID/versions/1/reparse"
+```
+
+Get the authenticated Japanese work aggregate:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $RESUME_DOCUMENT_API_KEY" \
+  "$RESUME_API_BASE_URL/v1/resume/work?lang=ja"
 ```
 
 List versions and follow a private download redirect:

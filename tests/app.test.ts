@@ -79,6 +79,7 @@ describe('public documentation routes', () => {
     ).not.toHaveProperty('parsedResume')
     expect(spec.components.schemas.ParsedResume.properties).toMatchObject({
       parseRevision: { type: 'integer', exclusiveMinimum: 0 },
+      isJapaneseShokumuKeirekisho: { type: 'boolean' },
       data: { $ref: '#/components/schemas/ResumeData' }
     })
     expect(
@@ -87,6 +88,16 @@ describe('public documentation routes', () => {
       work: { type: 'array' },
       model: { type: 'string' },
       sources: { type: 'array' }
+    })
+
+    expect(
+      spec.paths['/v1/resume/work'].get.parameters.find(
+        (parameter: any) => parameter.name === 'lang'
+      )
+    ).toMatchObject({
+      in: 'query',
+      required: false,
+      schema: { type: 'string', enum: ['ja'] }
     })
 
     for (const [path, item] of Object.entries<any>(spec.paths)) {
@@ -131,7 +142,7 @@ describe('public documentation routes', () => {
         post: [200, 400, 401, 404, 422, 500, 502, 503]
       },
       '/v1/resume/work': {
-        get: [200, 401, 500, 502, 503]
+        get: [200, 400, 401, 422, 500, 502, 503]
       }
     }
     for (const [path, operations] of Object.entries(expectedStatuses)) {
@@ -181,6 +192,8 @@ describe('document HTTP routes', () => {
     expect(created.data.currentVersion).toBe(1)
     expect(created.data.latestVersion.version).toBe(1)
     expect(created.data.parsedResume.data.basics.name).toBe('Jane Doe')
+
+    expect(created.data.parsedResume.isJapaneseShokumuKeirekisho).toBe(false)
     expect(created.requestId).toBeString()
     expect(createdResponse.headers.get('cache-control')).toBe(
       'private, no-store'
@@ -312,6 +325,50 @@ describe('document HTTP routes', () => {
       ((await refreshedResponse.json()) as any).data.sources[0].version
     ).toBe(2)
     expect(workCombiner.sources).toHaveLength(2)
+  })
+
+  test('supports authenticated Japanese aggregation and validates lang', async () => {
+    const { app, authorization, parser, workCombiner } = createSubject()
+    parser.result.isJapaneseShokumuKeirekisho = true
+    const createdResponse = await app.request('/v1/documents', {
+      method: 'POST',
+      headers: authorization,
+      body: uploadBody(pdfFile('shokumu-keirekisho.pdf'))
+    })
+    const created = (await createdResponse.json()) as any
+    expect(created.data.parsedResume.isJapaneseShokumuKeirekisho).toBe(true)
+
+    const response = await app.request('/v1/resume/work?lang=ja', {
+      headers: authorization
+    })
+    expect(response.status).toBe(200)
+    expect(((await response.json()) as any).data.sources).toHaveLength(1)
+    expect(workCombiner.languages).toEqual(['ja'])
+
+    const invalid = await app.request('/v1/resume/work?lang=en', {
+      headers: authorization
+    })
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR' }
+    })
+  })
+
+  test('requires an eligible Japanese source for lang=ja', async () => {
+    const { app, authorization } = createSubject()
+    await app.request('/v1/documents', {
+      method: 'POST',
+      headers: authorization,
+      body: uploadBody(pdfFile())
+    })
+
+    const response = await app.request('/v1/resume/work?lang=ja', {
+      headers: authorization
+    })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({
+      error: { code: 'JAPANESE_SHOKUMU_KEIREKISHO_REQUIRED' }
+    })
   })
 
   test('protects the combined work endpoint with bearer authentication', async () => {

@@ -10,6 +10,8 @@ import type {
 import type {
   ResumeWorkAggregateCacheRecord,
   ResumeWorkAggregateReady,
+  ResumeWorkCacheId,
+  ResumeWorkLanguage,
   ResumeWorkSource
 } from '../types/resume-work.types'
 
@@ -78,19 +80,29 @@ export interface DocumentRepository {
     limit: number,
     beforeVersion?: number
   ): Promise<Page<DocumentVersionRecord>>
-  listCurrentReadyWorkSources(): Promise<ResumeWorkSource[]>
-  findResumeWorkAggregate(): Promise<ResumeWorkAggregateCacheRecord | null>
+  listCurrentReadyWorkSources(
+    language?: ResumeWorkLanguage
+  ): Promise<ResumeWorkSource[]>
+  findResumeWorkAggregate(
+    cacheId: ResumeWorkCacheId
+  ): Promise<ResumeWorkAggregateCacheRecord | null>
   tryAcquireResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string,
     startedAt: Date,
     leaseUntil: Date
   ): Promise<boolean>
   completeResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
     fingerprint: string,
     owner: string,
     ready: ResumeWorkAggregateReady
   ): Promise<boolean>
-  releaseResumeWorkGeneration(fingerprint: string, owner: string): Promise<void>
+  releaseResumeWorkGeneration(
+    cacheId: ResumeWorkCacheId,
+    fingerprint: string,
+    owner: string
+  ): Promise<void>
   ensureIndexes(): Promise<void>
 }

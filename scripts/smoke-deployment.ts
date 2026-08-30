@@ -2,6 +2,7 @@ import { closeMongoConnection, getMongoContext } from '../src/db/mongodb'
 import { VercelBlobStorage } from '../src/services/blob-storage.service'
 import type {
   DocumentRecord,
+  DocumentVersionParseRecord,
   DocumentVersionRecord
 } from '../src/types/document.types'
 
@@ -59,6 +60,9 @@ async function cleanup(): Promise<void> {
     documentId
   })
   await db
+    .collection<DocumentVersionParseRecord>('document_version_parses')
+    .deleteMany({ documentId })
+  await db
     .collection<DocumentRecord>('documents')
     .deleteOne({ _id: documentId })
 }
@@ -94,6 +98,12 @@ try {
   if (!documentId || created.data?.currentVersion !== 1) {
     throw new Error('Document creation failed')
   }
+  if (
+    created.data?.parsedResume?.parseRevision !== 1 ||
+    created.data?.parsedResume?.data?.basics?.name?.toUpperCase() !== 'JANE DOE'
+  ) {
+    throw new Error('Initial résumé parsing failed')
+  }
 
   const second = JSON.parse(
     await vercelCurl(`/v1/documents/${documentId}/versions`, [
@@ -110,6 +120,41 @@ try {
   )
   if (second.data?.currentVersion !== 2) {
     throw new Error('Second version creation failed')
+  }
+  if (second.data?.parsedResume?.parseRevision !== 1) {
+    throw new Error('Second version résumé parsing failed')
+  }
+
+  const reparsed = JSON.parse(
+    await vercelCurl(`/v1/documents/${documentId}/versions/2/reparse`, [
+      '--silent',
+      '--request',
+      'POST',
+      '--header',
+      authorization
+    ])
+  )
+  if (reparsed.data?.parsedResume?.parseRevision !== 2) {
+    throw new Error('Résumé reparse failed')
+  }
+
+  const combinedWork = JSON.parse(
+    await vercelCurl('/v1/resume/work', ['--silent', '--header', authorization])
+  )
+  if (
+    !Array.isArray(combinedWork.data?.work) ||
+    !combinedWork.data?.sources?.some(
+      (source: {
+        documentId?: string
+        version?: number
+        parseRevision?: number
+      }) =>
+        source.documentId === documentId &&
+        source.version === 2 &&
+        source.parseRevision === 2
+    )
+  ) {
+    throw new Error('Combined résumé work generation failed')
   }
 
   const listed = JSON.parse(

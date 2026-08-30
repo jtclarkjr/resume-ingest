@@ -7,7 +7,7 @@ export const DOWNLOAD_URL_TTL_MS = 5 * 60 * 1000
 export const MAX_EXTRACTED_TEXT_CHARS = 200_000
 export const RESUME_PARSER_TIMEOUT_MS = 60_000
 export const RESUME_SCHEMA_VERSION = '1.0'
-export const RESUME_PARSER_VERSION = 'resume-json-v1'
+export const RESUME_PARSER_VERSION = 'resume-json-v2'
 export const RESUME_WORK_COMBINER_VERSION = 'resume-work-v1'
 export const RESUME_WORK_GENERATION_LEASE_MS = 70_000
 export const RESUME_WORK_GENERATION_WAIT_MS = 65_000
@@ -33,6 +33,7 @@ export const ERROR_CODES = {
   parser: 'RESUME_PARSE_FAILED',
   workAggregation: 'RESUME_WORK_AGGREGATION_FAILED',
   workAggregationBusy: 'RESUME_WORK_AGGREGATION_BUSY',
+  japaneseShokumuKeirekishoRequired: 'JAPANESE_SHOKUMU_KEIREKISHO_REQUIRED',
   storage: 'STORAGE_ERROR',
   database: 'DATABASE_ERROR',
   internal: 'INTERNAL_ERROR'

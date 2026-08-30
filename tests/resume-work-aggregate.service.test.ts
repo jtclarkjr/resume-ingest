@@ -65,6 +65,80 @@ describe('ResumeWorkAggregateService', () => {
     expect(second.fingerprint).toBe(first.fingerprint)
   })
 
+  test('excludes legacy parses until a qualifying Japanese reparse succeeds', async () => {
+    const { parser, repository, documentService, service } = createSubject()
+    const document = await documentService.createDocument(pdfFile())
+    const legacyParse = [...repository.parses.values()][0]!
+    delete legacyParse.isJapaneseShokumuKeirekisho
+
+    await expect(service.getCombinedWork('ja')).rejects.toMatchObject({
+      code: 'JAPANESE_SHOKUMU_KEIREKISHO_REQUIRED',
+      status: 422
+    })
+
+    parser.result.isJapaneseShokumuKeirekisho = true
+    await documentService.reparseVersion(document.document._id, 1)
+    const japanese = await service.getCombinedWork('ja')
+    const standard = await service.getCombinedWork()
+
+    expect(japanese.sources).toHaveLength(1)
+    expect(japanese.sources[0]?.parseRevision).toBe(2)
+    expect(japanese.fingerprint).not.toBe(standard.fingerprint)
+  })
+
+  test('filters mixed Japanese sources and isolates caches and leases', async () => {
+    const { parser, repository, combiner, documentService, service } =
+      createSubject()
+    parser.result.isJapaneseShokumuKeirekisho = true
+    const japaneseDocument = await documentService.createDocument(
+      pdfFile('japanese.pdf')
+    )
+    parser.result.isJapaneseShokumuKeirekisho = false
+    await documentService.createDocument(pdfFile('other.pdf'))
+
+    const japanese = await service.getCombinedWork('ja')
+    const standard = await service.getCombinedWork()
+    const cachedJapanese = await service.getCombinedWork('ja')
+
+    expect(japanese.sources).toHaveLength(1)
+    expect(standard.sources).toHaveLength(2)
+    expect(cachedJapanese.fingerprint).toBe(japanese.fingerprint)
+    expect(combiner.sources.map((sources) => sources.length)).toEqual([1, 2])
+    expect(combiner.languages).toEqual(['ja', undefined])
+    expect(repository.resumeWorkAggregates.has('global')).toBe(true)
+    expect(repository.resumeWorkAggregates.has('ja')).toBe(true)
+
+    parser.result.isJapaneseShokumuKeirekisho = true
+    await documentService.addVersion(
+      japaneseDocument.document._id,
+      pdfFile('japanese-v2.pdf')
+    )
+    const refreshed = await service.getCombinedWork('ja')
+    expect(refreshed.fingerprint).not.toBe(japanese.fingerprint)
+    expect(refreshed.sources[0]?.version).toBe(2)
+
+    const now = new Date()
+    const leaseUntil = new Date(now.getTime() + 1_000)
+    expect(
+      await repository.tryAcquireResumeWorkGeneration(
+        'global',
+        'next',
+        'global-owner',
+        now,
+        leaseUntil
+      )
+    ).toBe(true)
+    expect(
+      await repository.tryAcquireResumeWorkGeneration(
+        'ja',
+        'next',
+        'ja-owner',
+        now,
+        leaseUntil
+      )
+    ).toBe(true)
+  })
+
   test('regenerates after a new version or current reparse changes the fingerprint', async () => {
     const { combiner, documentService, service } = createSubject()
     const document = await documentService.createDocument(pdfFile())

@@ -42,6 +42,8 @@ Security and fidelity rules:
 - Use null for missing scalar values and empty arrays for missing collections.
 - Dates must use only the source precision: YYYY, YYYY-MM, or YYYY-MM-DD.
 - A current role with no explicit end date has a null endDate.
+- Set isJapaneseShokumuKeirekisho to true only when the source uses Japanese prose, has a 職務経歴書 heading or unmistakable equivalent, and includes at least one dated employer/role section with duties or achievements.
+- Set isJapaneseShokumuKeirekisho to false for a 履歴書 alone, a non-Japanese résumé, or a document missing that work-history structure.
 - Put concise source-quality or ambiguity notes in warnings; do not include private reasoning.`
 
 async function generateResumeOutput(
@@ -54,7 +56,8 @@ async function generateResumeOutput(
     output: Output.object({
       schema: ResumeParserOutputSchema,
       name: 'parsed_resume',
-      description: 'Source-faithful JSON Resume data and concise warnings.'
+      description:
+        'Source-faithful JSON Resume data, Japanese work-history classification, and concise warnings.'
     }),
     maxRetries: 2,
     timeout: request.timeout
@@ -88,6 +91,7 @@ export class AiGatewayResumeParser implements ResumeParser {
       )
       return {
         model: this.model,
+        isJapaneseShokumuKeirekisho: parsed.isJapaneseShokumuKeirekisho,
         data: parsed.data,
         warnings: parsed.warnings,
         usage: result.usage
